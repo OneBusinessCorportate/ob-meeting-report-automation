@@ -1,0 +1,3 @@
+call_url,candidate_name,role,call_type,source_call_id,transcript_file
+https://app.timeless.day/meetings/interview_demo_001,Кандидат Тестовый,бухгалтер,interview,interview_demo_001,./data/interviews/sample_transcript_candidate1.txt
+https://app.timeless.day/meetings/interview_demo_002,Второй Кандидат,бухгалтер,onboarding,,

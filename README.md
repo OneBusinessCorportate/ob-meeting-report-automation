@@ -1,15 +1,29 @@
 # ob-meeting-report-automation
 
-Automates the daily processing of OneBusiness morning **accounting team
-stand-up** meetings: from a **full transcript** all the way to a clean,
-Russian-language **Telegram report delivered at 11:00 (Armenia time)**.
+OneBusiness transcription automation. This repository hosts **two related
+pipelines** that share the same Timeless + Supabase + config infrastructure:
 
-Task: `[Расшифровка утренних встреч] V. Настроить ежедневную обработку встречи,
-Отправлять отчет в Telegram в 11:00`.
+- **Task I — Morning meeting report** (`meeting_pipeline/`): daily morning
+  accounting stand-up → full transcript → Supabase L1 → AI report → Supabase L2
+  → Russian **Telegram report at 11:00 (Armenia time)**.
+  Task: `[Расшифровка утренних встреч] V. Настроить ежедневную обработку встречи,
+  Отправлять отчет в Telegram в 11:00`.
+- **Task II — Interview/onboarding transcription** (`interview_pipeline/`):
+  interview & onboarding call **links** (from the «Обучающий центр ОВ» table) →
+  fetch **full transcript** via Timeless (link → transcript) → save it correctly
+  in Supabase `interview_calls` → update processing status.
+  Task: `[Автоматизация транскрибации собеседований] II из таблицы «Обучающий
+  центр ОВ»`.
+
+Both use the **full transcript** (never a summary), never crash on missing
+data, and support a local-file fallback when the Timeless API is unavailable.
+
+> Sections 1–12 below document **Task I**. **Task II** is documented in
+> section 13.
 
 ---
 
-## 1. What this project does
+## 1. What this project does (Task I)
 
 Every working morning the pipeline:
 
@@ -271,13 +285,14 @@ the steps. One combined job is fine for the MVP.
 ## 11. Tests
 
 Offline tests (no network, no real keys) cover JSON parsing, message splitting,
-ingest, analyze (success / AI failure / bad JSON / missing transcript) and
-delivery (present / missing report):
+ingest, analyze (success / AI failure / bad JSON / missing transcript),
+delivery (present / missing report) and the interview pipeline (task II):
 
 ```bash
 python -m pytest tests/ -v
 # or, without pytest:
 python tests/test_basic_flow.py
+python tests/test_interview_flow.py
 ```
 
 ## 12. Definition of Done (DoD)
@@ -298,3 +313,111 @@ python tests/test_basic_flow.py
 - [x] One failing step does not crash the run (each step is isolated).
 - [x] Telegram Markdown failures fall back to plain text instead of dropping the report.
 - [x] L2 includes decision log, praise/criticism, late-start, and a manager briefing.
+
+---
+
+## 13. Task II — interview / onboarding call transcription
+
+Automates fetching **full transcripts** for interview and onboarding/training
+calls (the «Обучающий центр ОВ» table). **Hiring decisions are made on these
+calls, so transcripts are saved in full and correctly — never a summary.**
+
+### Automation logic
+
+```
+Interview/onboarding call link            (from «Обучающий центр ОВ»)
+        │   load links: --url | --csv (Notion export) | INTERVIEW_LINKS_TABLE
+        ▼
+Timeless API:  link → full transcript      (local transcript_file fallback for MVP)
+        ▼
+Supabase  →  interview_calls.raw_transcript (full transcript, saved correctly)
+        ▼
+Processing status updated per call         (pending → processing → done | …)
+```
+
+- Each link gets a stable `source_call_id` (extracted from the Timeless URL),
+  so the table is **deduped** and the job is **safe to rerun** — calls already
+  `done` are skipped unless `--force`.
+- Statuses: `pending → processing → done | transcript_not_found | failed`.
+  Missing transcripts and errors are recorded with an `error_message`; one bad
+  link never stops the batch.
+- Reuses the shared `mtg_sources` registry (`timeless`) — no duplicate source
+  system.
+
+### One-time setup (create the table)
+
+Apply the migration once to your Supabase project (it reuses the existing
+`update_updated_at()` trigger function from the `mtg_` tables):
+
+```bash
+psql "$SUPABASE_DB_URL" -f sql/interview_calls.sql
+# or paste sql/interview_calls.sql into the Supabase SQL editor
+```
+
+### Environment variables (in addition to Task I)
+
+| Variable                 | Required | Description                                              |
+| ------------------------ | -------- | -------------------------------------------------------- |
+| `INTERVIEW_CALLS_TABLE`  | no       | Target table. Defaults to `interview_calls`.             |
+| `INTERVIEW_LINKS_TABLE`  | no       | Supabase table of links (if not using `--csv` / `--url`).|
+| `INTERVIEW_DEFAULT_ROLE` | no       | Default role label. Defaults to `бухгалтер`.             |
+
+Supabase + Timeless variables are shared with Task I.
+
+### Run commands
+
+```bash
+# From a CSV exported from the «Обучающий центр ОВ» Notion table:
+python scripts/transcribe_interviews.py --csv ./data/interviews/links.csv
+
+# One or more links directly:
+python scripts/transcribe_interviews.py \
+  --url https://app.timeless.day/meetings/abc123 \
+  --url https://app.timeless.day/meetings/def456
+
+# MVP local-file fallback + re-run already-done calls:
+python scripts/transcribe_interviews.py --csv ./data/interviews/sample_links.csv --force
+```
+
+### CSV format (Notion export / manual)
+
+Header row; only `call_url` is required:
+
+```
+call_url,candidate_name,role,call_type,source_call_id,transcript_file
+https://app.timeless.day/meetings/c1,Иван,бухгалтер,interview,c1,
+```
+
+- `transcript_file` (optional) — path to a local full-transcript text file used
+  as the **MVP fallback** when the Timeless API can't return the transcript.
+- A working sample is in `data/interviews/sample_links.csv` (+ its transcript).
+
+### Troubleshooting (Task II)
+
+- **Timeless API not available** — without `TIMELESS_API_TOKEN`, supply a
+  `transcript_file` per row in the CSV; the call is marked
+  `transcript_not_found` (with a clear `error_message`) if neither is present.
+- **Wrong id extracted from a link** — set `source_call_id` explicitly in the
+  CSV to override the URL parser.
+- **Table missing** — run `sql/interview_calls.sql` first.
+
+### Blockers (Task II)
+
+- The «Обучающий центр ОВ» source table is in **Notion**, which this system
+  cannot read directly. Links are therefore provided via `--csv` (Notion
+  export), `--url`, or a mirrored Supabase table (`INTERVIEW_LINKS_TABLE`).
+  Writing statuses *back into Notion* is out of scope — statuses live in
+  `interview_calls`.
+- Automatic full-transcript retrieval depends on a working **Timeless API**
+  token + transcript endpoint. Until confirmed, use the local `transcript_file`
+  fallback. (We do not scrape the Timeless UI.)
+
+### DoD (Task II)
+
+- [x] Automation logic implemented (`interview_pipeline/`, link → transcript → save → status).
+- [x] Script/workflow to fetch transcripts by links (`scripts/transcribe_interviews.py`).
+- [x] Table with processing statuses (`interview_calls`, migration in `sql/`).
+- [x] Full transcript saved correctly & completely (`raw_transcript`, never a summary).
+- [x] Local-file fallback for testing on real calls without paid API.
+- [x] Short run instructions (this section).
+- [x] Offline tests (`tests/test_interview_flow.py`).

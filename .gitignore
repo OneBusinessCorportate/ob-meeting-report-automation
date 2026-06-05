@@ -22,6 +22,12 @@ data/transcripts/*
 !data/transcripts/.gitkeep
 !data/transcripts/sample_meeting.txt
 
+# Local interview links / transcripts (keep samples, ignore real data)
+data/interviews/*
+!data/interviews/.gitkeep
+!data/interviews/sample_links.csv
+!data/interviews/sample_transcript_candidate1.txt
+
 # OS / editor
 .DS_Store
 .idea/

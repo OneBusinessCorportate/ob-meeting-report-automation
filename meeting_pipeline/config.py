@@ -72,6 +72,19 @@ class Config:
         default_factory=lambda: _get("MEETING_DELIVERY_TIME", "11:00")
     )
 
+    # --- Interview / onboarding transcription (task II) ---
+    # Supabase table that stores interview calls + full transcript + status.
+    interview_calls_table: str = field(
+        default_factory=lambda: _get("INTERVIEW_CALLS_TABLE", "interview_calls")
+    )
+    # Optional Supabase table holding the call links (if not using a CSV/Notion).
+    interview_links_table: Optional[str] = field(
+        default_factory=lambda: _get("INTERVIEW_LINKS_TABLE")
+    )
+    interview_default_role: str = field(
+        default_factory=lambda: _get("INTERVIEW_DEFAULT_ROLE", "бухгалтер")
+    )
+
     # Armenia is UTC+4 (no DST). Used for "today" boundaries and scheduling notes.
     timezone_offset_hours: int = 4
 

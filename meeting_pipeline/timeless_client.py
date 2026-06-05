@@ -101,6 +101,43 @@ class TimelessClient:
                 )
         return TimelessResult(ok=False, error=BLOCKER_MESSAGE)
 
+    @staticmethod
+    def meeting_id_from_url(url: str) -> Optional[str]:
+        """Extract a Timeless call/meeting id from a share link.
+
+        Handles shapes like:
+          https://app.timeless.day/meetings/<id>
+          https://timeless.day/m/<id>?foo=bar
+          https://api.timeless.day/v1/meetings/<id>/transcript
+        Falls back to the last non-empty path segment. Returns None if nothing
+        usable is found.
+        """
+        if not url or not isinstance(url, str):
+            return None
+        from urllib.parse import urlparse
+
+        cleaned = url.strip()
+        try:
+            parsed = urlparse(cleaned)
+        except Exception:
+            return None
+        segments = [s for s in (parsed.path or "").split("/") if s]
+        # Skip well-known trailing keywords so we land on the id itself.
+        skip = {"transcript", "full", "meetings", "m", "meeting", "v1"}
+        for seg in reversed(segments):
+            if seg.lower() not in skip:
+                return seg
+        return segments[-1] if segments else None
+
+    def get_full_transcript_by_url(self, url: str) -> TimelessResult:
+        """Fetch the FULL transcript for a Timeless call given its share link."""
+        meeting_id = self.meeting_id_from_url(url)
+        if not meeting_id:
+            return TimelessResult(
+                ok=False, error=f"Could not extract a meeting id from URL: {url}"
+            )
+        return self.get_full_transcript(meeting_id)
+
     def get_full_transcript(self, meeting_id: str) -> TimelessResult:
         """Attempt to fetch the FULL transcript for a meeting.
 
