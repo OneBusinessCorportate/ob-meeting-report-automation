@@ -43,8 +43,46 @@ def analyze_meeting(
     repo: SupabaseRepo,
     ai: AIClient,
     meeting: Dict[str, Any],
+    *,
+    force: bool = False,
 ) -> Dict[str, Any]:
-    """Analyze a single L1 meeting and store the resulting L2 report."""
+    """Analyze a single L1 meeting and store the resulting L2 report.
+
+    Idempotent by default: if a current completed L2 analysis already exists
+    for this meeting, it is skipped (no duplicate version) unless ``force`` is
+    set. Any unexpected error is caught so a single meeting cannot crash a batch.
+    """
+    # Idempotency guard — avoid creating duplicate L2 versions on rerun.
+    if not force and repo.has_current_completed_analysis(meeting["id"]):
+        log.info(
+            "Meeting %s already has a current completed L2 report; skipping "
+            "(use force=True to re-analyze).",
+            meeting["id"],
+        )
+        return {"ok": True, "status": "skipped", "analysis": None}
+
+    try:
+        return _analyze_meeting_inner(repo, ai, meeting)
+    except Exception as exc:  # never let one meeting crash the run
+        log.exception("Unexpected error analyzing meeting %s: %s", meeting["id"], exc)
+        try:
+            analysis = repo.create_analysis(
+                meeting_id=meeting["id"],
+                status="failed",
+                model_id=ai.model_id,
+                prompt_version=ai.prompt_version,
+                error_message=f"unexpected_error: {exc}",
+            )
+        except Exception:  # storing the failure must not crash either
+            analysis = None
+        return {"ok": False, "status": "failed", "analysis": analysis}
+
+
+def _analyze_meeting_inner(
+    repo: SupabaseRepo,
+    ai: AIClient,
+    meeting: Dict[str, Any],
+) -> Dict[str, Any]:
     transcript = extract_full_transcript(meeting)
     meeting_date = (meeting.get("actual_start") or "")[:10] or None
 
@@ -84,6 +122,12 @@ def analyze_meeting(
         return {"ok": False, "status": "failed", "analysis": analysis}
 
     report = result.report
+    # Preserve extra grounded fields (decision log, praise/criticism) that have
+    # no dedicated column inside ai_metadata.report_extras.
+    ai_metadata = dict(result.ai_metadata or {})
+    if result.extras:
+        ai_metadata["report_extras"] = result.extras
+
     analysis = repo.create_analysis(
         meeting_id=meeting["id"],
         status="completed",
@@ -101,7 +145,7 @@ def analyze_meeting(
         late_start_minutes=report.get("late_start_minutes"),
         mgmt_recommendations=report.get("mgmt_recommendations"),
         telegram_report_md=report.get("telegram_report_md"),
-        ai_metadata=result.ai_metadata or None,
+        ai_metadata=ai_metadata or None,
         processing_time_ms=result.processing_time_ms,
     )
     log.info("Stored completed L2 analysis %s for meeting %s", analysis["id"], meeting["id"])
@@ -113,10 +157,15 @@ def analyze_pending(
     *,
     date_str: Optional[str] = None,
     source_meeting_id: Optional[str] = None,
+    force: bool = False,
     repo: Optional[SupabaseRepo] = None,
     ai: Optional[AIClient] = None,
 ) -> Dict[str, Any]:
-    """Analyze all pending meetings for a date, or one specific meeting."""
+    """Analyze all pending meetings for a date, or one specific meeting.
+
+    Safe to rerun: meetings that already have a current completed L2 report are
+    skipped unless ``force`` is set.
+    """
     repo = repo or SupabaseRepo(config)
     ai = ai or AIClient(config)
 
@@ -128,14 +177,19 @@ def analyze_pending(
             log.warning("No meeting found with source_meeting_id=%s", source_meeting_id)
     else:
         on_date: date = parse_date(date_str, config.timezone_offset_hours)
+        # The pending query already filters out meetings with a current report;
+        # with force we re-fetch everything completed for the day instead.
         meetings = repo.get_today_meetings_without_analysis(on_date)
 
-    results = [analyze_meeting(repo, ai, m) for m in meetings if m]
-    completed = sum(1 for r in results if r["ok"])
+    results = [analyze_meeting(repo, ai, m, force=force) for m in meetings if m]
+    completed = sum(1 for r in results if r["status"] == "completed")
+    skipped = sum(1 for r in results if r["status"] == "skipped")
+    failed = sum(1 for r in results if r["status"] == "failed")
     return {
-        "ok": completed > 0 or not meetings,
+        "ok": failed == 0,
         "analyzed": len(results),
         "completed": completed,
-        "failed": len(results) - completed,
+        "skipped": skipped,
+        "failed": failed,
         "results": results,
     }

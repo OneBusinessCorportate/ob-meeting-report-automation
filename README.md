@@ -55,11 +55,35 @@ The existing `mtg_*` tables are reused (no parallel system is created):
   by `(source_id, source_meeting_id)`.
 - **L2 (`mtg_analyses`) — AI report layer.** The derived, structured report:
   `summary`, `topics`, `action_items`, `open_questions`, `people_mentioned`,
-  `problems_risks`, `sentiment`, `meeting_mood`, `mgmt_recommendations`, and the
-  ready-to-send `telegram_report_md`. Linked to L1 via `meeting_id`, versioned,
-  with `is_current = true` marking the latest. A DB trigger
+  `problems_risks`, `sentiment`, `meeting_mood`, `late_start` /
+  `late_start_minutes`, `mgmt_recommendations`, and the ready-to-send
+  `telegram_report_md`. Linked to L1 via `meeting_id`, versioned, with
+  `is_current = true` marking the latest. A DB trigger
   (`supersede_old_analyses`) automatically demotes the previous current row to
   `superseded` when a new current analysis is inserted.
+
+### What the L2 report contains
+
+Per the management requirements, each report (and the Telegram message) covers:
+
+- **summary** — short recap.
+- **topics** — discussed topics with key points and rough time share.
+- **decisions** — a decision log (only explicitly stated decisions).
+- **action_items** — task, assignee, deadline, priority (`Не указано` when not stated).
+- **open_questions** — unresolved questions.
+- **people_mentioned** — who spoke / who was mentioned, with context.
+- **praised / criticized** — who was praised and who was criticized, and why.
+- **problems_risks** — problems and risks with severity.
+- **sentiment** + **meeting_mood** — overall tone, energy, engagement, dominant/silent speakers.
+- **late_start / late_start_minutes** — whether the meeting started late, and by how much.
+- **mgmt_recommendations** — a **separate manager briefing for Эмилия**:
+  `focus_points`, `recurring_issues`, `risks`, `who_to_support`,
+  `needs_intervention`.
+- **telegram_report_md** — the final markdown message.
+
+`decisions`, `praised` and `criticized` have no dedicated column, so they are
+preserved inside `mtg_analyses.ai_metadata.report_extras` (and surfaced in the
+Telegram report). Nothing is lost.
 
 ## 4. Why the FULL transcript is required
 
@@ -145,6 +169,12 @@ Only analyze (one meeting):
 python scripts/analyze_meeting.py --source-meeting-id timeless_manual_2026_03_26_accounting_sync
 ```
 
+Re-analyze (force a new L2 version even if a current report exists):
+
+```bash
+python scripts/analyze_meeting.py --source-meeting-id timeless_manual_2026_03_26_accounting_sync --force
+```
+
 Only deliver:
 
 ```bash
@@ -226,7 +256,16 @@ the steps. One combined job is fine for the MVP.
 - Effect: `deliver` returns `delivery_failed`; the failure detail is recorded in
   the analysis `ai_metadata.delivery`.
 - Fix: verify the token/chat id and that the bot can post to the chat; long
-  messages are split automatically at ~4000 chars.
+  messages are split automatically at ~4000 chars. If the AI-generated Markdown
+  contains entities Telegram cannot parse (HTTP 400), the client automatically
+  retries that part as **plain text** so the report still gets delivered.
+
+**Duplicate L2 reports**
+- The pipeline is safe to rerun: meetings that already have a *current
+  completed* L2 report are skipped, so no duplicate versions are created.
+- To intentionally regenerate a report, pass `--force` to `analyze_meeting.py`
+  or `run_daily_meeting_report.py`; this inserts a new version and supersedes
+  the old one via the DB trigger.
 
 ## 11. Tests
 
@@ -254,3 +293,7 @@ python tests/test_basic_flow.py
 - [x] Render cron config exists (`0 7 * * 1-5` = 11:00 Armenia).
 - [x] Logs are clear.
 - [x] No real secrets are committed (`.env` is git-ignored).
+- [x] Safe to rerun — no duplicate L2 versions (idempotent; `--force` to override).
+- [x] One failing step does not crash the run (each step is isolated).
+- [x] Telegram Markdown failures fall back to plain text instead of dropping the report.
+- [x] L2 includes decision log, praise/criticism, late-start, and a manager briefing.

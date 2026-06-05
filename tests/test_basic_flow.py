@@ -195,11 +195,18 @@ class FakeResponse:
 
 
 class FakeTelegramSession:
-    def __init__(self):
+    def __init__(self, fail_markdown=False):
         self.calls = []
+        self._fail_markdown = fail_markdown
 
     def post(self, url, json=None, timeout=None):
         self.calls.append(json)
+        # Simulate Telegram rejecting bad Markdown with HTTP 400 once.
+        if self._fail_markdown and "parse_mode" in json:
+            return FakeResponse(
+                status_code=400,
+                payload={"ok": False, "description": "can't parse entities"},
+            )
         return FakeResponse()
 
 
@@ -217,6 +224,9 @@ def _config():
 SAMPLE_REPORT = {
     "summary": "Краткое содержание планёрки.",
     "topics": [{"topic": "Налоги", "key_points": ["12/15 сдано"], "duration_pct": 30}],
+    "decisions": [
+        {"decision": "Эскалировать долг Mega Build", "context": "задолженности", "owner": "Гор"}
+    ],
     "action_items": [
         {
             "text": "Закрыть расхождение",
@@ -228,14 +238,22 @@ SAMPLE_REPORT = {
     ],
     "open_questions": ["Когда придут документы?"],
     "people_mentioned": [
-        {"name": "Лилит", "context": "ответственная", "sentiment": "neutral"}
+        {"name": "Лилит", "spoke": True, "context": "ответственная", "sentiment": "neutral"}
     ],
+    "praised": [{"name": "Лилит", "reason": "закрыла отчётность вовремя"}],
+    "criticized": [{"name": "Армен Строй", "reason": "не передаёт документы"}],
     "problems_risks": [{"text": "Долг клиента", "severity": "high"}],
     "sentiment": "neutral",
     "meeting_mood": {"overall": "продуктивное", "energy": "medium"},
     "late_start": True,
     "late_start_minutes": 5,
-    "mgmt_recommendations": ["Эскалировать долг"],
+    "mgmt_recommendations": {
+        "focus_points": ["Долг Mega Build"],
+        "recurring_issues": ["Клиенты не присылают первичку"],
+        "risks": ["Расхождение по НДС"],
+        "who_to_support": ["Тагуи — блокирует Армен Строй"],
+        "needs_intervention": ["Прямые переговоры по Mega Build"],
+    },
     "telegram_report_md": "📋 **Планёрка**\n\n**Кратко**\nВсё ок.",
 }
 
@@ -381,6 +399,47 @@ def test_analyze_meeting_success():
     assert analysis["summary"] == SAMPLE_REPORT["summary"]
     assert analysis["telegram_report_md"]
     assert analysis["sentiment"] == "neutral"
+    # Manager briefing is stored in its column as a structured object.
+    assert "needs_intervention" in analysis["mgmt_recommendations"]
+    # Extra grounded fields (decision log, praise/criticism) are preserved.
+    extras = analysis["ai_metadata"]["report_extras"]
+    assert extras["decisions"][0]["owner"] == "Гор"
+    assert extras["praised"][0]["name"] == "Лилит"
+    assert extras["criticized"][0]["name"] == "Армен Строй"
+
+
+def test_analyze_meeting_idempotent_skip():
+    repo = _repo()
+    ai = AIClient(_config(), client=FakeAnthropic(report=SAMPLE_REPORT))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "raw_transcript": {"type": "full_transcript", "text": "long transcript text"},
+    }
+    first = analyze_meeting(repo, ai, meeting)
+    assert first["status"] == "completed"
+    # Re-running must NOT create a duplicate version.
+    second = analyze_meeting(repo, ai, meeting)
+    assert second["status"] == "skipped"
+    rows = repo.client.store["mtg_analyses"]
+    assert len([r for r in rows if r["meeting_id"] == meeting["id"]]) == 1
+    # ...unless forced.
+    third = analyze_meeting(repo, ai, meeting, force=True)
+    assert third["status"] == "completed"
+    assert third["analysis"]["version"] == 2
+
+
+def test_analyze_meeting_missing_required_field_fails():
+    repo = _repo()
+    bad = {"summary": "", "topics": []}  # no summary / telegram_report_md
+    ai = AIClient(_config(), client=FakeAnthropic(report=bad))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "raw_transcript": {"type": "full_transcript", "text": "text"},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is False
+    assert result["analysis"]["status"] == "failed"
+    assert "required field" in result["analysis"]["error_message"]
 
 
 def test_analyze_meeting_ai_failure_saves_failed():
@@ -445,6 +504,18 @@ def test_deliver_today_sends_report():
     assert result["status"] == "delivered"
     assert len(session.calls) == 1
     assert "Планёрка" in session.calls[0]["text"]
+
+
+def test_telegram_markdown_fallback_to_plain():
+    config = _config()
+    session = FakeTelegramSession(fail_markdown=True)
+    telegram = TelegramClient(config, session=session)
+    result = telegram.send_message("📋 **bad _markdown", parse_mode="Markdown")
+    assert result.ok is True
+    # First attempt with parse_mode (rejected), retry without it (accepted).
+    assert len(session.calls) == 2
+    assert "parse_mode" in session.calls[0]
+    assert "parse_mode" not in session.calls[1]
 
 
 def test_deliver_today_missing_report_notifies():

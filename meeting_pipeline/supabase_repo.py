@@ -190,6 +190,19 @@ class SupabaseRepo:
         return pending
 
     # --- Analyses (L2) --------------------------------------------------------
+    def has_current_completed_analysis(self, meeting_id: str) -> bool:
+        """True if the meeting already has a current, completed L2 report."""
+        existing = (
+            self.client.table("mtg_analyses")
+            .select("id")
+            .eq("meeting_id", meeting_id)
+            .eq("is_current", True)
+            .eq("status", "completed")
+            .limit(1)
+            .execute()
+        ).data
+        return bool(existing)
+
     def _next_version(self, meeting_id: str) -> int:
         existing = (
             self.client.table("mtg_analyses")

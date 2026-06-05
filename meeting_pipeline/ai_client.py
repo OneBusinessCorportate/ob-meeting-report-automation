@@ -19,8 +19,8 @@ from .utils import extract_json, get_logger
 
 log = get_logger("meeting_pipeline.ai")
 
-# Fields we persist into mtg_analyses from the model's JSON.
-_STRUCTURED_FIELDS = (
+# Fields that map directly to mtg_analyses columns.
+_COLUMN_FIELDS = (
     "summary",
     "topics",
     "action_items",
@@ -35,6 +35,17 @@ _STRUCTURED_FIELDS = (
     "telegram_report_md",
 )
 
+# Extra grounded fields the schema requests but which have no dedicated column.
+# They are preserved inside ``mtg_analyses.ai_metadata.report_extras``.
+_EXTRA_FIELDS = (
+    "decisions",
+    "praised",
+    "criticized",
+)
+
+# The report is only considered usable if at least these core fields are present.
+_REQUIRED_FIELDS = ("summary", "telegram_report_md")
+
 _VALID_SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
 
 
@@ -42,6 +53,7 @@ _VALID_SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
 class AnalysisResult:
     ok: bool
     report: Dict[str, Any] = field(default_factory=dict)
+    extras: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
     model_id: Optional[str] = None
     prompt_version: Optional[str] = None
@@ -127,10 +139,25 @@ class AIClient:
                 raw_text=text,
             )
 
+        missing = [f for f in _REQUIRED_FIELDS if not parsed.get(f)]
+        if missing:
+            log.error("AI report missing required field(s): %s", ", ".join(missing))
+            return AnalysisResult(
+                ok=False,
+                error=f"AI report missing required field(s): {', '.join(missing)}",
+                model_id=self.model_id,
+                prompt_version=self.prompt_version,
+                processing_time_ms=elapsed_ms,
+                ai_metadata={"usage": usage},
+                raw_text=text,
+            )
+
         report = self._normalize(parsed)
+        extras = {k: parsed.get(k) for k in _EXTRA_FIELDS if k in parsed}
         return AnalysisResult(
             ok=True,
             report=report,
+            extras=extras,
             model_id=self.model_id,
             prompt_version=self.prompt_version,
             processing_time_ms=elapsed_ms,
@@ -163,8 +190,8 @@ class AIClient:
 
     @staticmethod
     def _normalize(parsed: Dict[str, Any]) -> Dict[str, Any]:
-        """Keep only known fields and sanitise the sentiment enum value."""
-        report = {k: parsed.get(k) for k in _STRUCTURED_FIELDS if k in parsed}
+        """Keep only column-backed fields and sanitise the sentiment enum value."""
+        report = {k: parsed.get(k) for k in _COLUMN_FIELDS if k in parsed}
         sentiment = report.get("sentiment")
         if sentiment is not None and sentiment not in _VALID_SENTIMENTS:
             report["sentiment"] = "neutral"

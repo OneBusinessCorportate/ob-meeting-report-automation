@@ -58,14 +58,8 @@ class TelegramClient:
         parts = split_telegram_message(text)
         responses = []
         for index, part in enumerate(parts, start=1):
-            payload = {
-                "chat_id": self.chat_id,
-                "text": part,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": True,
-            }
             try:
-                resp = self._session.post(self._api_url(), json=payload, timeout=30)
+                resp = self._post_part(part, parse_mode)
             except Exception as exc:
                 log.error("Telegram send failed on part %d: %s", index, exc)
                 return TelegramResult(
@@ -77,6 +71,29 @@ class TelegramClient:
 
             ok = getattr(resp, "status_code", None) == 200
             body = self._safe_json(resp)
+
+            # If Markdown parsing failed (Telegram returns HTTP 400 for bad
+            # entities), retry the part as plain text so the report still lands.
+            if parse_mode and not (ok and isinstance(body, dict) and body.get("ok")):
+                if getattr(resp, "status_code", None) == 400:
+                    log.warning(
+                        "Telegram rejected Markdown on part %d (%s); "
+                        "retrying as plain text.",
+                        index,
+                        body.get("description") if isinstance(body, dict) else "?",
+                    )
+                    try:
+                        resp = self._post_part(part, None)
+                    except Exception as exc:
+                        return TelegramResult(
+                            ok=False,
+                            parts_sent=index - 1,
+                            error=f"Telegram request failed: {exc}",
+                            responses=responses,
+                        )
+                    ok = getattr(resp, "status_code", None) == 200
+                    body = self._safe_json(resp)
+
             responses.append(body)
             if not ok or not (isinstance(body, dict) and body.get("ok")):
                 detail = body.get("description") if isinstance(body, dict) else None
@@ -95,6 +112,16 @@ class TelegramClient:
             log.info("Sent Telegram message part %d/%d", index, len(parts))
 
         return TelegramResult(ok=True, parts_sent=len(parts), responses=responses)
+
+    def _post_part(self, text: str, parse_mode: Optional[str]):
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return self._session.post(self._api_url(), json=payload, timeout=30)
 
     @staticmethod
     def _safe_json(resp: Any):

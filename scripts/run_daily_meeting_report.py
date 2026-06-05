@@ -42,6 +42,11 @@ def main() -> int:
     parser.add_argument("--date", help="Date (YYYY-MM-DD). Defaults to today.")
     parser.add_argument("--language", help="Transcript language code.")
     parser.add_argument("--source-meeting-id", help="Override source_meeting_id.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-analyze even if a current completed L2 report already exists.",
+    )
     parser.add_argument("--skip-ingest", action="store_true")
     parser.add_argument("--skip-analyze", action="store_true")
     parser.add_argument("--skip-deliver", action="store_true")
@@ -53,52 +58,66 @@ def main() -> int:
     # --- Step 1: Ingest -------------------------------------------------------
     if not args.skip_ingest:
         log.info("=== STEP 1: INGEST ===")
-        ingest_result = ingest_meeting(
-            config,
-            file_path=args.file,
-            title=args.title,
-            date_str=args.date,
-            language=args.language,
-            source_meeting_id=args.source_meeting_id,
-        )
-        summary["ingest"] = {
-            "status": ingest_result.get("status"),
-            "ok": ingest_result.get("ok"),
-            "detail": ingest_result.get("detail"),
-        }
-        if not ingest_result.get("ok"):
-            log.warning(
-                "Ingest did not produce new data (status=%s). "
-                "Continuing — analyze/deliver may still find existing data.",
-                ingest_result.get("status"),
+        try:
+            ingest_result = ingest_meeting(
+                config,
+                file_path=args.file,
+                title=args.title,
+                date_str=args.date,
+                language=args.language,
+                source_meeting_id=args.source_meeting_id,
             )
+            summary["ingest"] = {
+                "status": ingest_result.get("status"),
+                "ok": ingest_result.get("ok"),
+                "detail": ingest_result.get("detail"),
+            }
+            if not ingest_result.get("ok"):
+                log.warning(
+                    "Ingest did not produce new data (status=%s). "
+                    "Continuing — analyze/deliver may still find existing data.",
+                    ingest_result.get("status"),
+                )
+        except Exception as exc:
+            log.exception("Ingest step failed: %s", exc)
+            summary["ingest"] = {"status": "error", "ok": False, "detail": str(exc)}
     else:
         log.info("Skipping ingest (--skip-ingest).")
 
     # --- Step 2: Analyze ------------------------------------------------------
     if not args.skip_analyze:
         log.info("=== STEP 2: ANALYZE ===")
-        analyze_result = analyze_pending(
-            config,
-            date_str=args.date,
-            source_meeting_id=args.source_meeting_id,
-        )
-        summary["analyze"] = {
-            "analyzed": analyze_result.get("analyzed"),
-            "completed": analyze_result.get("completed"),
-            "failed": analyze_result.get("failed"),
-        }
+        try:
+            analyze_result = analyze_pending(
+                config,
+                date_str=args.date,
+                source_meeting_id=args.source_meeting_id,
+                force=args.force,
+            )
+            summary["analyze"] = {
+                "analyzed": analyze_result.get("analyzed"),
+                "completed": analyze_result.get("completed"),
+                "skipped": analyze_result.get("skipped"),
+                "failed": analyze_result.get("failed"),
+            }
+        except Exception as exc:
+            log.exception("Analyze step failed: %s", exc)
+            summary["analyze"] = {"status": "error", "detail": str(exc)}
     else:
         log.info("Skipping analyze (--skip-analyze).")
 
     # --- Step 3: Deliver ------------------------------------------------------
     if not args.skip_deliver:
         log.info("=== STEP 3: DELIVER ===")
-        deliver_result = deliver_today(config, date_str=args.date)
-        summary["deliver"] = {
-            "status": deliver_result.get("status"),
-            "delivered": deliver_result.get("delivered"),
-        }
+        try:
+            deliver_result = deliver_today(config, date_str=args.date)
+            summary["deliver"] = {
+                "status": deliver_result.get("status"),
+                "delivered": deliver_result.get("delivered"),
+            }
+        except Exception as exc:
+            log.exception("Deliver step failed: %s", exc)
+            summary["deliver"] = {"status": "error", "delivered": False}
     else:
         log.info("Skipping deliver (--skip-deliver).")
 

@@ -30,6 +30,11 @@ def main() -> int:
         "--source-meeting-id",
         help="Analyze a single meeting by its source_meeting_id.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-analyze even if a current completed L2 report already exists.",
+    )
     args = parser.parse_args()
 
     config = load_config()
@@ -37,12 +42,14 @@ def main() -> int:
         config,
         date_str=args.date,
         source_meeting_id=args.source_meeting_id,
+        force=args.force,
     )
 
     log.info(
-        "Analyze result: analyzed=%s completed=%s failed=%s",
+        "Analyze result: analyzed=%s completed=%s skipped=%s failed=%s",
         result.get("analyzed"),
         result.get("completed"),
+        result.get("skipped"),
         result.get("failed"),
     )
     summary = {k: v for k, v in result.items() if k != "results"}
