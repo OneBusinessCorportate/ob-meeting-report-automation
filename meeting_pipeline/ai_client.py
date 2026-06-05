@@ -1,0 +1,171 @@
+"""Anthropic-based AI client that turns a full transcript into a structured L2 report.
+
+The wrapper forces Russian output, grounded extraction (no invented facts) and
+a strict JSON response. If the model returns invalid JSON we surface a clear
+error so the caller can store a ``failed`` analysis (and, optionally, a safe
+fallback markdown) instead of crashing.
+
+Install requirement: ``anthropic>=0.39`` (see requirements.txt).
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from .config import Config
+from .prompts import meeting_analysis_v1 as prompt_v1
+from .utils import extract_json, get_logger
+
+log = get_logger("meeting_pipeline.ai")
+
+# Fields we persist into mtg_analyses from the model's JSON.
+_STRUCTURED_FIELDS = (
+    "summary",
+    "topics",
+    "action_items",
+    "open_questions",
+    "people_mentioned",
+    "problems_risks",
+    "sentiment",
+    "meeting_mood",
+    "late_start",
+    "late_start_minutes",
+    "mgmt_recommendations",
+    "telegram_report_md",
+)
+
+_VALID_SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
+
+
+@dataclass
+class AnalysisResult:
+    ok: bool
+    report: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
+    model_id: Optional[str] = None
+    prompt_version: Optional[str] = None
+    processing_time_ms: Optional[int] = None
+    ai_metadata: Dict[str, Any] = field(default_factory=dict)
+    raw_text: Optional[str] = None
+
+
+class AIClient:
+    def __init__(self, config: Config, client: Any = None):
+        self.config = config
+        self.model_id = config.ai_model_id
+        self.prompt_version = config.ai_prompt_version or prompt_v1.PROMPT_VERSION
+        if client is not None:
+            self.client = client
+        else:
+            config.require_anthropic()
+            from anthropic import Anthropic  # imported lazily
+
+            self.client = Anthropic(api_key=config.anthropic_api_key)
+
+    def analyze(
+        self,
+        transcript_text: str,
+        *,
+        title: Optional[str] = None,
+        meeting_date: Optional[str] = None,
+        language: Optional[str] = None,
+        time_range: Optional[str] = None,
+        participants: Optional[List[str]] = None,
+        max_tokens: int = 4096,
+    ) -> AnalysisResult:
+        """Generate a structured L2 report from the FULL transcript."""
+        if not transcript_text or not transcript_text.strip():
+            return AnalysisResult(
+                ok=False,
+                error="Empty transcript: cannot generate analysis.",
+                model_id=self.model_id,
+                prompt_version=self.prompt_version,
+            )
+
+        user_prompt = prompt_v1.build_user_prompt(
+            transcript_text,
+            title=title,
+            meeting_date=meeting_date,
+            language=language,
+            time_range=time_range,
+            participants=participants,
+        )
+
+        start = time.monotonic()
+        try:
+            response = self.client.messages.create(
+                model=self.model_id,
+                max_tokens=max_tokens,
+                system=prompt_v1.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+        except Exception as exc:
+            log.error("Anthropic API call failed: %s", exc)
+            return AnalysisResult(
+                ok=False,
+                error=f"AI request failed: {exc}",
+                model_id=self.model_id,
+                prompt_version=self.prompt_version,
+                processing_time_ms=int((time.monotonic() - start) * 1000),
+            )
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        text = self._response_text(response)
+        usage = self._usage(response)
+
+        parsed = extract_json(text)
+        if parsed is None:
+            log.error("Model returned non-JSON / invalid JSON output.")
+            return AnalysisResult(
+                ok=False,
+                error="AI returned invalid JSON; could not parse structured report.",
+                model_id=self.model_id,
+                prompt_version=self.prompt_version,
+                processing_time_ms=elapsed_ms,
+                ai_metadata={"usage": usage},
+                raw_text=text,
+            )
+
+        report = self._normalize(parsed)
+        return AnalysisResult(
+            ok=True,
+            report=report,
+            model_id=self.model_id,
+            prompt_version=self.prompt_version,
+            processing_time_ms=elapsed_ms,
+            ai_metadata={"usage": usage},
+            raw_text=text,
+        )
+
+    # --- helpers --------------------------------------------------------------
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        try:
+            parts = []
+            for block in response.content:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(text)
+            return "\n".join(parts)
+        except Exception:
+            return str(getattr(response, "content", "") or "")
+
+    @staticmethod
+    def _usage(response: Any) -> Dict[str, Any]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return {}
+        return {
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+        }
+
+    @staticmethod
+    def _normalize(parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep only known fields and sanitise the sentiment enum value."""
+        report = {k: parsed.get(k) for k in _STRUCTURED_FIELDS if k in parsed}
+        sentiment = report.get("sentiment")
+        if sentiment is not None and sentiment not in _VALID_SENTIMENTS:
+            report["sentiment"] = "neutral"
+        return report

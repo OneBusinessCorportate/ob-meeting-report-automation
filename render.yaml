@@ -1,0 +1,61 @@
+# Render Cron configuration for the OneBusiness daily meeting report.
+#
+# Schedule note: Render cron runs in UTC. Armenia is UTC+4 (no DST), so the
+# desired 11:00 Armenia delivery time == 07:00 UTC.
+#   "0 7 * * 1-5"  ->  07:00 UTC == 11:00 Armenia, Mon–Fri.
+#
+# Set the environment variables from .env.example in the Render dashboard
+# (Environment tab) or via a synced env group. Never commit real secrets.
+
+services:
+  - type: cron
+    name: ob-meeting-daily-report
+    runtime: python
+    schedule: "0 7 * * 1-5"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python scripts/run_daily_meeting_report.py"
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: TIMELESS_API_TOKEN
+        sync: false
+      - key: TIMELESS_API_BASE_URL
+        value: https://api.timeless.day/v1
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AI_MODEL_ID
+        value: claude-sonnet-4-20250514
+      - key: AI_PROMPT_VERSION
+        value: full_transcript_prompt_v1
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_MANAGEMENT_CHAT_ID
+        sync: false
+      - key: MEETING_DEFAULT_SOURCE
+        value: timeless
+      - key: MEETING_DEFAULT_LANGUAGE
+        value: hy
+      - key: MEETING_DELIVERY_TIME
+        value: "11:00"
+
+# --- Alternative: three separate cron jobs (uncomment to use instead) --------
+#   - type: cron
+#     name: ob-meeting-ingest
+#     runtime: python
+#     schedule: "45 6 * * 1-5"   # 10:45 Armenia
+#     buildCommand: "pip install -r requirements.txt"
+#     startCommand: "python scripts/ingest_meeting.py"
+#   - type: cron
+#     name: ob-meeting-analyze
+#     runtime: python
+#     schedule: "50 6 * * 1-5"   # 10:50 Armenia
+#     buildCommand: "pip install -r requirements.txt"
+#     startCommand: "python scripts/analyze_meeting.py"
+#   - type: cron
+#     name: ob-meeting-deliver
+#     runtime: python
+#     schedule: "0 7 * * 1-5"    # 11:00 Armenia
+#     buildCommand: "pip install -r requirements.txt"
+#     startCommand: "python scripts/deliver_report.py"

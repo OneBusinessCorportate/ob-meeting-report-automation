@@ -1,0 +1,485 @@
+"""Offline tests for the meeting pipeline.
+
+These tests use in-memory fakes for Supabase, Anthropic and Telegram, so they
+require NO network access and NO real credentials. Run with:
+
+    python -m pytest tests/ -v
+    # or, without pytest installed:
+    python tests/test_basic_flow.py
+"""
+from __future__ import annotations
+
+import copy
+import json
+import os
+import sys
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from meeting_pipeline.ai_client import AIClient
+from meeting_pipeline.analyze import analyze_meeting, extract_full_transcript
+from meeting_pipeline.config import Config
+from meeting_pipeline.deliver import MISSING_REPORT_MESSAGE, deliver_today
+from meeting_pipeline.ingest import build_raw_transcript, ingest_from_file
+from meeting_pipeline.supabase_repo import SupabaseRepo
+from meeting_pipeline.telegram_client import TelegramClient
+from meeting_pipeline.timeless_client import TimelessClient
+from meeting_pipeline.utils import extract_json, split_telegram_message
+
+
+# --------------------------------------------------------------------------- #
+# In-memory fakes
+# --------------------------------------------------------------------------- #
+class _Result:
+    def __init__(self, data):
+        self.data = data
+
+
+class FakeTable:
+    """A tiny chainable query builder over a list of dict rows."""
+
+    def __init__(self, store, name):
+        self._store = store
+        self._name = name
+        self._rows = store.setdefault(name, [])
+        self._op = "select"
+        self._payload = None
+        self._on_conflict = None
+        self._filters = []  # (op, col, value)
+        self._order = None
+        self._desc = False
+        self._limit = None
+
+    # -- builders --
+    def select(self, *_args, **_kwargs):
+        self._op = "select"
+        return self
+
+    def insert(self, payload):
+        self._op = "insert"
+        self._payload = payload
+        return self
+
+    def upsert(self, payload, on_conflict=None):
+        self._op = "upsert"
+        self._payload = payload
+        self._on_conflict = on_conflict
+        return self
+
+    def update(self, payload):
+        self._op = "update"
+        self._payload = payload
+        return self
+
+    def eq(self, col, value):
+        self._filters.append(("eq", col, value))
+        return self
+
+    def gte(self, col, value):
+        self._filters.append(("gte", col, value))
+        return self
+
+    def lt(self, col, value):
+        self._filters.append(("lt", col, value))
+        return self
+
+    def order(self, col, desc=False):
+        self._order = col
+        self._desc = desc
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    # -- execution --
+    def _match(self, row):
+        for op, col, value in self._filters:
+            cell = row.get(col)
+            if op == "eq" and cell != value:
+                return False
+            if op == "gte" and not (cell is not None and str(cell) >= str(value)):
+                return False
+            if op == "lt" and not (cell is not None and str(cell) < str(value)):
+                return False
+        return True
+
+    def execute(self):
+        if self._op in ("insert", "upsert"):
+            payloads = self._payload if isinstance(self._payload, list) else [self._payload]
+            inserted = []
+            for payload in payloads:
+                row = copy.deepcopy(payload)
+                if self._op == "upsert" and self._on_conflict:
+                    keys = [k.strip() for k in self._on_conflict.split(",")]
+                    existing = next(
+                        (
+                            r
+                            for r in self._rows
+                            if all(r.get(k) == row.get(k) for k in keys)
+                        ),
+                        None,
+                    )
+                    if existing:
+                        existing.update(row)
+                        inserted.append(copy.deepcopy(existing))
+                        continue
+                row.setdefault("id", str(uuid.uuid4()))
+                self._rows.append(row)
+                inserted.append(copy.deepcopy(row))
+            return _Result(inserted)
+
+        if self._op == "update":
+            updated = []
+            for row in self._rows:
+                if self._match(row):
+                    row.update(self._payload)
+                    updated.append(copy.deepcopy(row))
+            return _Result(updated)
+
+        # select
+        rows = [copy.deepcopy(r) for r in self._rows if self._match(r)]
+        if self._order:
+            rows.sort(key=lambda r: r.get(self._order) or 0, reverse=self._desc)
+        if self._limit is not None:
+            rows = rows[: self._limit]
+        return _Result(rows)
+
+
+class FakeSupabaseClient:
+    def __init__(self):
+        self.store = {}
+
+    def table(self, name):
+        return FakeTable(self.store, name)
+
+
+class FakeAnthropic:
+    """Returns a canned JSON report (or raises) based on config."""
+
+    def __init__(self, report=None, raise_exc=False, bad_json=False):
+        self._report = report
+        self._raise = raise_exc
+        self._bad_json = bad_json
+        self.messages = self
+
+    def create(self, **kwargs):
+        if self._raise:
+            raise RuntimeError("simulated API failure")
+        text = "not json at all" if self._bad_json else json.dumps(self._report)
+
+        class _Block:
+            def __init__(self, t):
+                self.text = t
+
+        class _Usage:
+            input_tokens = 100
+            output_tokens = 50
+
+        class _Resp:
+            content = [_Block(text)]
+            usage = _Usage()
+
+        return _Resp()
+
+
+class FakeResponse:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {"ok": True, "result": {"message_id": 1}}
+
+    def json(self):
+        return self._payload
+
+
+class FakeTelegramSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, json=None, timeout=None):
+        self.calls.append(json)
+        return FakeResponse()
+
+
+def _config():
+    return Config(
+        supabase_url="http://fake",
+        supabase_service_role_key="fake",
+        anthropic_api_key="fake",
+        telegram_bot_token="fake",
+        telegram_management_chat_id="123",
+        timeless_api_token=None,
+    )
+
+
+SAMPLE_REPORT = {
+    "summary": "Краткое содержание планёрки.",
+    "topics": [{"topic": "Налоги", "key_points": ["12/15 сдано"], "duration_pct": 30}],
+    "action_items": [
+        {
+            "text": "Закрыть расхождение",
+            "assignee": "Лилит",
+            "deadline": "Не указано",
+            "status": "open",
+            "priority": "high",
+        }
+    ],
+    "open_questions": ["Когда придут документы?"],
+    "people_mentioned": [
+        {"name": "Лилит", "context": "ответственная", "sentiment": "neutral"}
+    ],
+    "problems_risks": [{"text": "Долг клиента", "severity": "high"}],
+    "sentiment": "neutral",
+    "meeting_mood": {"overall": "продуктивное", "energy": "medium"},
+    "late_start": True,
+    "late_start_minutes": 5,
+    "mgmt_recommendations": ["Эскалировать долг"],
+    "telegram_report_md": "📋 **Планёрка**\n\n**Кратко**\nВсё ок.",
+}
+
+
+# --------------------------------------------------------------------------- #
+# Unit tests
+# --------------------------------------------------------------------------- #
+def test_split_short_message():
+    assert split_telegram_message("hello") == ["hello"]
+
+
+def test_split_long_message():
+    text = "\n".join(f"line {i}" for i in range(2000))
+    parts = split_telegram_message(text, max_len=500)
+    assert len(parts) > 1
+    assert all(len(p) <= 500 for p in parts)
+    # No content lost (ignoring whitespace differences).
+    assert "line 1999" in parts[-1]
+
+
+def test_split_single_oversized_line():
+    parts = split_telegram_message("x" * 9000, max_len=4000)
+    assert len(parts) == 3
+    assert sum(len(p) for p in parts) == 9000
+
+
+def test_extract_json_plain():
+    assert extract_json('{"a": 1}') == {"a": 1}
+
+
+def test_extract_json_fenced():
+    assert extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+
+
+def test_extract_json_with_prose():
+    assert extract_json('Here is the result:\n{"a": 1}\nThanks!') == {"a": 1}
+
+
+def test_extract_json_invalid():
+    assert extract_json("totally not json") is None
+
+
+def test_build_raw_transcript_shape():
+    raw = build_raw_transcript("hello", language="hy", source="Timeless")
+    assert raw["type"] == "full_transcript"
+    assert raw["language"] == "hy"
+    assert raw["text"] == "hello"
+    assert raw["segments"] == []
+
+
+def test_extract_full_transcript():
+    meeting = {"raw_transcript": {"type": "full_transcript", "text": "T"}}
+    assert extract_full_transcript(meeting) == "T"
+    assert extract_full_transcript({"raw_transcript": {"text": "  "}}) is None
+    assert extract_full_transcript({"raw_transcript": None}) is None
+
+
+def test_timeless_not_configured_returns_blocker():
+    client = TimelessClient(_config())
+    from datetime import date
+
+    result = client.list_today_meetings(date(2026, 3, 26))
+    assert result.ok is False
+    assert "Timeless API" in (result.error or "")
+
+
+# --------------------------------------------------------------------------- #
+# Integration-ish tests with fakes
+# --------------------------------------------------------------------------- #
+def _repo():
+    return SupabaseRepo(_config(), client=FakeSupabaseClient())
+
+
+def test_ensure_source_idempotent():
+    repo = _repo()
+    s1 = repo.ensure_source("timeless")
+    s2 = repo.ensure_source("timeless")
+    assert s1["id"] == s2["id"]
+    assert s1["display_name"] == "Timeless"
+
+
+def test_ingest_from_file(tmp_path=None):
+    import tempfile
+
+    repo = _repo()
+    config = _config()
+    d = tempfile.mkdtemp()
+    f = Path(d) / "meeting.txt"
+    f.write_text("Speaker 1: Привет\nSpeaker 2: Начнём.", encoding="utf-8")
+
+    from datetime import date
+
+    result = ingest_from_file(
+        repo,
+        config,
+        file_path=str(f),
+        title="Планёрка",
+        on_date=date(2026, 3, 26),
+        language="hy",
+        source_meeting_id="manual_2026_03_26_test",
+    )
+    assert result["ok"] is True
+    assert result["status"] == "ingested"
+    meeting = result["meeting"]
+    assert meeting["raw_transcript"]["type"] == "full_transcript"
+    assert "Привет" in meeting["raw_transcript"]["text"]
+    assert meeting["status"] == "completed"
+
+
+def test_ingest_missing_file():
+    repo = _repo()
+    config = _config()
+    result = ingest_from_file(
+        repo, config, file_path="/no/such/file_xyz.txt", title="x"
+    )
+    assert result["ok"] is False
+    assert result["status"] == "transcript_not_found"
+
+
+def test_create_analysis_version_increment():
+    repo = _repo()
+    meeting_id = str(uuid.uuid4())
+    a1 = repo.create_analysis(meeting_id=meeting_id, status="completed", summary="v1")
+    a2 = repo.create_analysis(meeting_id=meeting_id, status="completed", summary="v2")
+    assert a1["version"] == 1
+    assert a2["version"] == 2
+
+
+def test_analyze_meeting_success():
+    repo = _repo()
+    ai = AIClient(_config(), client=FakeAnthropic(report=SAMPLE_REPORT))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "title": "Планёрка",
+        "transcript_language": "hy",
+        "actual_start": "2026-03-26T05:00:00+00:00",
+        "raw_transcript": {"type": "full_transcript", "text": "long transcript text"},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is True
+    analysis = result["analysis"]
+    assert analysis["status"] == "completed"
+    assert analysis["summary"] == SAMPLE_REPORT["summary"]
+    assert analysis["telegram_report_md"]
+    assert analysis["sentiment"] == "neutral"
+
+
+def test_analyze_meeting_ai_failure_saves_failed():
+    repo = _repo()
+    ai = AIClient(_config(), client=FakeAnthropic(raise_exc=True))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "raw_transcript": {"type": "full_transcript", "text": "text"},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is False
+    assert result["analysis"]["status"] == "failed"
+    assert result["analysis"]["error_message"]
+
+
+def test_analyze_meeting_bad_json_saves_failed():
+    repo = _repo()
+    ai = AIClient(_config(), client=FakeAnthropic(bad_json=True))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "raw_transcript": {"type": "full_transcript", "text": "text"},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is False
+    assert result["analysis"]["status"] == "failed"
+    assert "JSON" in result["analysis"]["error_message"]
+
+
+def test_analyze_meeting_no_transcript_saves_failed():
+    repo = _repo()
+    ai = AIClient(_config(), client=FakeAnthropic(report=SAMPLE_REPORT))
+    meeting = {"id": str(uuid.uuid4()), "raw_transcript": {"text": ""}}
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is False
+    assert result["analysis"]["status"] == "failed"
+    assert "transcript_not_found" in result["analysis"]["error_message"]
+
+
+def test_deliver_today_sends_report():
+    from datetime import date
+
+    config = _config()
+    repo = _repo()
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_2026_03_26",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-03-26T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="📋 **Планёрка**\nГотово.",
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert result["delivered"] is True
+    assert result["status"] == "delivered"
+    assert len(session.calls) == 1
+    assert "Планёрка" in session.calls[0]["text"]
+
+
+def test_deliver_today_missing_report_notifies():
+    config = _config()
+    repo = _repo()
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert result["status"] == "report_not_found"
+    assert len(session.calls) == 1
+    assert MISSING_REPORT_MESSAGE in session.calls[0]["text"]
+
+
+# --------------------------------------------------------------------------- #
+# Manual runner (no pytest required)
+# --------------------------------------------------------------------------- #
+def _run_all():
+    tests = [
+        (name, obj)
+        for name, obj in sorted(globals().items())
+        if name.startswith("test_") and callable(obj)
+    ]
+    passed = 0
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS  {name}")
+            passed += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"FAIL  {name}: {exc!r}")
+            failed += 1
+    print(f"\n{passed} passed, {failed} failed, {len(tests)} total")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_all())
