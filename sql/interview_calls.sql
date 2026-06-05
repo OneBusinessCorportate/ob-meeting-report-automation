@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS public.interview_calls (
     role                text,                   -- e.g. 'бухгалтер'
     call_type           text NOT NULL DEFAULT 'interview',  -- interview | onboarding | training
     status              text NOT NULL DEFAULT 'pending',
-        -- pending | processing | done | transcript_not_found | failed
+        -- pending | transcript_found | saved
+        -- | transcript_not_available | manual_action_required | failed
     decision            text,                   -- hiring decision, if captured later
     transcript_language text,
     raw_transcript      jsonb,                  -- full transcript: {type,language,source,text,segments}

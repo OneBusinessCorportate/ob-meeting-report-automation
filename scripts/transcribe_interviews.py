@@ -54,13 +54,14 @@ def main() -> int:
     )
 
     log.info(
-        "Done: processed=%s done=%s skipped=%s failed=%s",
+        "Done: processed=%s saved=%s skipped=%s needs_attention=%s",
         result.get("processed"),
-        result.get("done"),
+        result.get("saved"),
         result.get("skipped"),
-        result.get("failed"),
+        result.get("needs_attention"),
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    printable = {k: v for k, v in result.items() if k != "results"}
+    print(json.dumps(printable, ensure_ascii=False, indent=2, default=str))
     return 0 if result.get("ok") else 1
 
 

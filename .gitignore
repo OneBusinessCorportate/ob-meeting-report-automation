@@ -28,6 +28,9 @@ data/interviews/*
 !data/interviews/sample_links.csv
 !data/interviews/sample_transcript_candidate1.txt
 
+# Real training-center links export (keep only the example template)
+data/training_center_links.csv
+
 # OS / editor
 .DS_Store
 .idea/

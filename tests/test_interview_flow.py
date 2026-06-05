@@ -19,6 +19,7 @@ from interview_pipeline.interview_repo import InterviewRepo  # noqa: E402
 from interview_pipeline.links_source import InterviewLink, from_csv  # noqa: E402
 from interview_pipeline.transcribe import (  # noqa: E402
     _resolve_source_call_id,
+    export_status_list,
     transcribe_interviews,
     transcribe_link,
 )
@@ -93,9 +94,9 @@ def test_transcribe_link_local_file_saves_full_transcript():
         repo, timeless, source["id"], link, default_language="ru"
     )
     assert result["ok"] is True
-    assert result["status"] == "done"
+    assert result["status"] == "saved"
     row = repo.get_by_source_call_id(source["id"], "c1")
-    assert row["status"] == "done"
+    assert row["status"] == "saved"
     assert row["raw_transcript"]["type"] == "full_transcript"
     assert "Полный транскрипт" in row["raw_transcript"]["text"]
 
@@ -111,30 +112,42 @@ def test_transcribe_link_idempotent_skip_and_force():
     )
     timeless = TimelessClient(_config())
     first = transcribe_link(repo, timeless, source["id"], link, default_language="ru")
-    assert first["status"] == "done"
+    assert first["status"] == "saved"
     second = transcribe_link(repo, timeless, source["id"], link, default_language="ru")
     assert second["status"] == "skipped"
     forced = transcribe_link(
         repo, timeless, source["id"], link, default_language="ru", force=True
     )
-    assert forced["status"] == "done"
+    assert forced["status"] == "saved"
 
 
-def test_transcribe_link_no_transcript_marks_not_found():
+def test_no_token_no_file_marks_manual_action_required():
     repo = _repo()
     source = repo.ensure_timeless_source()
-    # No Timeless token, no transcript_file -> transcript_not_found, no crash.
+    # No Timeless token, no transcript_file -> cannot fetch automatically.
     link = InterviewLink(call_url="https://app.timeless.day/meetings/c3")
     timeless = TimelessClient(_config())
     result = transcribe_link(repo, timeless, source["id"], link, default_language="ru")
     assert result["ok"] is False
-    assert result["status"] == "transcript_not_found"
+    assert result["status"] == "manual_action_required"
     row = repo.get_by_source_call_id(source["id"], "c3")
-    assert row["status"] == "transcript_not_found"
+    assert row["status"] == "manual_action_required"
     assert row["error_message"]
 
 
-def test_transcribe_interviews_batch():
+def test_missing_local_file_marks_transcript_not_available():
+    repo = _repo()
+    source = repo.ensure_timeless_source()
+    link = InterviewLink(
+        call_url="https://app.timeless.day/meetings/c4",
+        transcript_file="/no/such/transcript.txt",
+    )
+    timeless = TimelessClient(_config())
+    result = transcribe_link(repo, timeless, source["id"], link, default_language="ru")
+    assert result["status"] == "transcript_not_available"
+
+
+def test_transcribe_interviews_batch_and_status_export():
     repo = _repo()
     timeless = TimelessClient(_config())
     d = tempfile.mkdtemp()
@@ -144,15 +157,39 @@ def test_transcribe_interviews_batch():
     csv_path.write_text(
         "call_url,transcript_file\n"
         f"https://app.timeless.day/meetings/b1,{good}\n"
-        "https://app.timeless.day/meetings/b2,\n",  # no transcript -> not found
+        "https://app.timeless.day/meetings/b2,\n",  # no transcript -> manual_action_required
         encoding="utf-8",
     )
+    out = Path(d) / "status.csv"
     result = transcribe_interviews(
-        _config(), csv_path=str(csv_path), repo=repo, timeless=timeless
+        _config(),
+        csv_path=str(csv_path),
+        repo=repo,
+        timeless=timeless,
+        output_path=str(out),
     )
     assert result["processed"] == 2
-    assert result["done"] == 1
-    assert result["failed"] == 1
+    assert result["saved"] == 1
+    assert result["needs_attention"] == 1
+    assert len(result["status_list"]) == 2
+    # Status list exported to CSV.
+    assert out.exists()
+    exported = out.read_text(encoding="utf-8")
+    assert "saved" in exported and "manual_action_required" in exported
+
+
+def test_export_status_list_writes_csv():
+    d = tempfile.mkdtemp()
+    out = Path(d) / "s.csv"
+    rows = [
+        {"source_call_id": "a", "status": "saved", "candidate_name": "X", "chars": 10, "call_url": "u"},
+        {"source_call_id": "b", "status": "failed", "error": "boom", "call_url": "v"},
+    ]
+    path = export_status_list(rows, str(out))
+    assert Path(path).exists()
+    content = out.read_text(encoding="utf-8")
+    assert content.startswith("source_call_id,")
+    assert "failed" in content and "boom" in content
 
 
 # --- Manual runner ------------------------------------------------------------

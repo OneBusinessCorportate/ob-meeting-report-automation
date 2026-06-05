@@ -316,38 +316,57 @@ python tests/test_interview_flow.py
 
 ---
 
-## 13. Task II — interview / onboarding call transcription
+## 13. Task II — interview / onboarding transcription (`interview_transcript_processing`)
 
-Automates fetching **full transcripts** for interview and onboarding/training
-calls (the «Обучающий центр ОВ» table). **Hiring decisions are made on these
-calls, so transcripts are saved in full and correctly — never a summary.**
+This repository supports **two independent modes**, kept separate because the
+meeting type and purpose differ:
+
+| Mode | Code | Flow | Output |
+| ---- | ---- | ---- | ------ |
+| `daily_meeting_report` | `meeting_pipeline/` | transcript → L1 → AI L2 → Telegram | Telegram report at 11:00 |
+| `interview_transcript_processing` | `interview_pipeline/` | call link → full transcript → saved transcript + status | Saved transcript + per-link status (no Telegram) |
+
+Task II automates fetching **full transcripts** for interview & onboarding/
+training calls (the «Обучающий центр ОВ» table). **Hiring decisions are made on
+these calls, so transcripts are saved in full and correctly — never a summary.**
+No AI report or Telegram message is produced (that can be added later).
 
 ### Automation logic
 
 ```
-Interview/onboarding call link            (from «Обучающий центр ОВ»)
-        │   load links: --url | --csv (Notion export) | INTERVIEW_LINKS_TABLE
+Interview/onboarding call link             (from «Обучающий центр ОВ»)
+        │   load links: --input/--csv (export) | --url | INTERVIEW_LINKS_TABLE
         ▼
-Timeless API:  link → full transcript      (local transcript_file fallback for MVP)
+Check transcript availability → fetch FULL transcript via Timeless
+        │                        (local transcript_file fallback for MVP)
         ▼
-Supabase  →  interview_calls.raw_transcript (full transcript, saved correctly)
+Supabase  →  interview_calls.raw_transcript  (full transcript, saved correctly)
         ▼
-Processing status updated per call         (pending → processing → done | …)
+Per-link status saved in the table AND exported as a status-list CSV
 ```
 
-- Each link gets a stable `source_call_id` (extracted from the Timeless URL),
-  so the table is **deduped** and the job is **safe to rerun** — calls already
-  `done` are skipped unless `--force`.
-- Statuses: `pending → processing → done | transcript_not_found | failed`.
-  Missing transcripts and errors are recorded with an `error_message`; one bad
+- Links are processed **one by one**; each gets a logged status, and one bad
   link never stops the batch.
-- Reuses the shared `mtg_sources` registry (`timeless`) — no duplicate source
-  system.
+- Each link gets a stable `source_call_id` (from the Timeless URL), so the table
+  is **deduped** and the job is **safe to rerun** — calls already `saved` are
+  skipped unless `--force`.
+- Reuses the shared `mtg_sources` registry (`timeless`) — no duplicate source.
+
+### Statuses
+
+| Status | Meaning |
+| ------ | ------- |
+| `pending` | Row created, not yet processed. |
+| `transcript_found` | A full transcript was located for the call. |
+| `saved` | Full transcript fetched and stored in `raw_transcript`. |
+| `transcript_not_available` | Recording/link exists but no full transcript could be fetched. |
+| `manual_action_required` | Cannot fetch automatically (no API token and no local file) — a human must supply it. |
+| `failed` | Unexpected error (recorded in `error_message`). |
 
 ### One-time setup (create the table)
 
-Apply the migration once to your Supabase project (it reuses the existing
-`update_updated_at()` trigger function from the `mtg_` tables):
+Apply the migration once (it reuses the existing `update_updated_at()` trigger
+from the `mtg_` tables):
 
 ```bash
 psql "$SUPABASE_DB_URL" -f sql/interview_calls.sql
@@ -359,7 +378,7 @@ psql "$SUPABASE_DB_URL" -f sql/interview_calls.sql
 | Variable                 | Required | Description                                              |
 | ------------------------ | -------- | -------------------------------------------------------- |
 | `INTERVIEW_CALLS_TABLE`  | no       | Target table. Defaults to `interview_calls`.             |
-| `INTERVIEW_LINKS_TABLE`  | no       | Supabase table of links (if not using `--csv` / `--url`).|
+| `INTERVIEW_LINKS_TABLE`  | no       | Supabase table of links (if not using `--input` / `--url`).|
 | `INTERVIEW_DEFAULT_ROLE` | no       | Default role label. Defaults to `бухгалтер`.             |
 
 Supabase + Timeless variables are shared with Task I.
@@ -367,19 +386,25 @@ Supabase + Timeless variables are shared with Task I.
 ### Run commands
 
 ```bash
-# From a CSV exported from the «Обучающий центр ОВ» Notion table:
-python scripts/transcribe_interviews.py --csv ./data/interviews/links.csv
+# Main entry — from a spreadsheet/CSV exported from «Обучающий центр ОВ»:
+python scripts/process_training_center_links.py --input ./data/training_center_links.csv
 
 # One or more links directly:
-python scripts/transcribe_interviews.py \
+python scripts/process_training_center_links.py \
   --url https://app.timeless.day/meetings/abc123 \
   --url https://app.timeless.day/meetings/def456
 
-# MVP local-file fallback + re-run already-done calls:
-python scripts/transcribe_interviews.py --csv ./data/interviews/sample_links.csv --force
+# Choose where to write the status list, and re-process already-saved calls:
+python scripts/process_training_center_links.py \
+  --input ./data/training_center_links.csv \
+  --output ./data/interviews/status.csv --force
 ```
 
-### CSV format (Notion export / manual)
+A per-link **status list** is printed to the log and written to a CSV
+(`--output`, default `./data/interviews/status_<timestamp>.csv`).
+`scripts/transcribe_interviews.py` is kept as a thin alias of the same logic.
+
+### Input format (spreadsheet / CSV export)
 
 Header row; only `call_url` is required:
 
@@ -390,34 +415,38 @@ https://app.timeless.day/meetings/c1,Иван,бухгалтер,interview,c1,
 
 - `transcript_file` (optional) — path to a local full-transcript text file used
   as the **MVP fallback** when the Timeless API can't return the transcript.
-- A working sample is in `data/interviews/sample_links.csv` (+ its transcript).
+- A working sample is `data/training_center_links.example.csv` (with a sample
+  transcript in `data/interviews/`).
 
 ### Troubleshooting (Task II)
 
-- **Timeless API not available** — without `TIMELESS_API_TOKEN`, supply a
-  `transcript_file` per row in the CSV; the call is marked
-  `transcript_not_found` (with a clear `error_message`) if neither is present.
-- **Wrong id extracted from a link** — set `source_call_id` explicitly in the
-  CSV to override the URL parser.
+- **No transcript & no token** → `manual_action_required`: configure
+  `TIMELESS_API_TOKEN` or add a `transcript_file` column for that row.
+- **Timeless returned no transcript** → `transcript_not_available` (with a clear
+  `error_message`). We never substitute the Timeless summary.
+- **Wrong id extracted from a link** — set `source_call_id` explicitly in the CSV.
 - **Table missing** — run `sql/interview_calls.sql` first.
 
 ### Blockers (Task II)
 
 - The «Обучающий центр ОВ» source table is in **Notion**, which this system
-  cannot read directly. Links are therefore provided via `--csv` (Notion
-  export), `--url`, or a mirrored Supabase table (`INTERVIEW_LINKS_TABLE`).
-  Writing statuses *back into Notion* is out of scope — statuses live in
-  `interview_calls`.
+  cannot read directly. Links are provided via `--input` (export), `--url`, or a
+  mirrored Supabase table (`INTERVIEW_LINKS_TABLE`). Writing statuses *back into
+  Notion* is out of scope — statuses live in `interview_calls` and the exported
+  status CSV.
 - Automatic full-transcript retrieval depends on a working **Timeless API**
   token + transcript endpoint. Until confirmed, use the local `transcript_file`
   fallback. (We do not scrape the Timeless UI.)
 
 ### DoD (Task II)
 
-- [x] Automation logic implemented (`interview_pipeline/`, link → transcript → save → status).
-- [x] Script/workflow to fetch transcripts by links (`scripts/transcribe_interviews.py`).
-- [x] Table with processing statuses (`interview_calls`, migration in `sql/`).
-- [x] Full transcript saved correctly & completely (`raw_transcript`, never a summary).
-- [x] Local-file fallback for testing on real calls without paid API.
-- [x] Short run instructions (this section).
+- [x] Spreadsheet/table of links is analyzed (loaded from CSV/URL/Supabase).
+- [x] Interview & onboarding calls processed (`call_type` = interview/onboarding).
+- [x] Transcript availability is checked per link.
+- [x] Full transcripts saved when available (`raw_transcript`, never a summary).
+- [x] Status saved in `interview_calls` AND exported as a status-list CSV.
+- [x] Tested on multiple calls; one failing link doesn't crash the batch.
+- [x] README explains how to run it (this section).
+- [x] Missing-transcript cases handled clearly (`transcript_not_available` /
+      `manual_action_required`).
 - [x] Offline tests (`tests/test_interview_flow.py`).
