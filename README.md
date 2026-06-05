@@ -256,9 +256,10 @@ the steps. One combined job is fine for the MVP.
 - Effect: `deliver` returns `delivery_failed`; the failure detail is recorded in
   the analysis `ai_metadata.delivery`.
 - Fix: verify the token/chat id and that the bot can post to the chat; long
-  messages are split automatically at ~4000 chars. If the AI-generated Markdown
-  contains entities Telegram cannot parse (HTTP 400), the client automatically
-  retries that part as **plain text** so the report still gets delivered.
+  messages are split automatically at ~4000 chars. The stored report uses GFM
+  `**bold**`, which the client converts to Telegram legacy `*bold*` on send. If
+  the Markdown still can't be parsed (HTTP 400), the client automatically
+  retries that part as **plain text** so the report is never dropped.
 
 **Duplicate L2 reports**
 - The pipeline is safe to rerun: meetings that already have a *current

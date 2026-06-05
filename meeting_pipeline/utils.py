@@ -139,6 +139,20 @@ def split_telegram_message(text: str, max_len: int = TELEGRAM_MAX_LEN) -> List[s
     return chunks or [""]
 
 
+def to_telegram_markdown(text: str) -> str:
+    """Adapt GitHub-flavoured markdown to Telegram's legacy ``Markdown`` mode.
+
+    The stored ``telegram_report_md`` uses GFM ``**bold**``, but Telegram's
+    legacy parser expects single-asterisk ``*bold*`` — double asterisks render
+    incorrectly or trigger an HTTP 400. This converts ``**x**`` -> ``*x*`` while
+    leaving the rest of the message untouched. The canonical stored value is not
+    modified; this runs only at send time.
+    """
+    if not text:
+        return text
+    return re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+
+
 def coalesce(value: Any, default: str = "Не указано") -> Any:
     """Return ``default`` for empty/None values (Russian 'Not specified')."""
     if value is None:

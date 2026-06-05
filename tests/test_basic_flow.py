@@ -22,11 +22,19 @@ from meeting_pipeline.ai_client import AIClient
 from meeting_pipeline.analyze import analyze_meeting, extract_full_transcript
 from meeting_pipeline.config import Config
 from meeting_pipeline.deliver import MISSING_REPORT_MESSAGE, deliver_today
-from meeting_pipeline.ingest import build_raw_transcript, ingest_from_file
+from meeting_pipeline.ingest import (
+    build_raw_transcript,
+    ingest_from_file,
+    ingest_meeting,
+)
 from meeting_pipeline.supabase_repo import SupabaseRepo
 from meeting_pipeline.telegram_client import TelegramClient
 from meeting_pipeline.timeless_client import TimelessClient
-from meeting_pipeline.utils import extract_json, split_telegram_message
+from meeting_pipeline.utils import (
+    extract_json,
+    split_telegram_message,
+    to_telegram_markdown,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -311,6 +319,12 @@ def test_extract_full_transcript():
     assert extract_full_transcript({"raw_transcript": None}) is None
 
 
+def test_to_telegram_markdown_converts_bold():
+    assert to_telegram_markdown("**Привет** мир") == "*Привет* мир"
+    assert to_telegram_markdown("a **b** c **d**") == "a *b* c *d*"
+    assert to_telegram_markdown("no bold here") == "no bold here"
+
+
 def test_timeless_not_configured_returns_blocker():
     client = TimelessClient(_config())
     from datetime import date
@@ -504,6 +518,28 @@ def test_deliver_today_sends_report():
     assert result["status"] == "delivered"
     assert len(session.calls) == 1
     assert "Планёрка" in session.calls[0]["text"]
+
+
+def test_telegram_sends_converted_bold():
+    config = _config()
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = telegram.send_message("📋 **Планёрка**\nГотово.", parse_mode="Markdown")
+    assert result.ok is True
+    # GFM **bold** is converted to Telegram legacy *bold* on the wire.
+    assert session.calls[0]["text"] == "📋 *Планёрка*\nГотово."
+
+
+def test_ingest_no_file_no_timeless_returns_recording_not_found():
+    config = _config()  # timeless_api_token is None
+    repo = _repo()
+    timeless = TimelessClient(config)
+    result = ingest_meeting(
+        config, file_path=None, repo=repo, timeless=timeless
+    )
+    assert result["ok"] is False
+    assert result["status"] == "recording_not_found"
+    assert "fallback" in (result.get("detail") or "")
 
 
 def test_telegram_markdown_fallback_to_plain():

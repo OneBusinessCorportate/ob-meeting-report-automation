@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from .config import Config
-from .utils import get_logger, split_telegram_message
+from .utils import get_logger, split_telegram_message, to_telegram_markdown
 
 log = get_logger("meeting_pipeline.telegram")
 
@@ -114,6 +114,9 @@ class TelegramClient:
         return TelegramResult(ok=True, parts_sent=len(parts), responses=responses)
 
     def _post_part(self, text: str, parse_mode: Optional[str]):
+        # Telegram legacy Markdown uses *bold*, not GFM **bold**.
+        if parse_mode == "Markdown":
+            text = to_telegram_markdown(text)
         payload = {
             "chat_id": self.chat_id,
             "text": text,
