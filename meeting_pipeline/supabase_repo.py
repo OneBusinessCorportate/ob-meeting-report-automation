@@ -320,6 +320,71 @@ class SupabaseRepo:
         result = self.client.table("mtg_analyses").insert(payload).execute()
         return result.data[0]
 
+    def record_failed_analysis(
+        self,
+        *,
+        meeting_id: str,
+        model_id: Optional[str] = None,
+        prompt_version: Optional[str] = None,
+        processing_time_ms: Optional[int] = None,
+        ai_metadata: Optional[dict] = None,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record a failed analysis without cluttering the table.
+
+        - If the meeting already has a current *completed* report, the failure is
+          NOT stored (we never clobber a good report).
+        - If a current *failed* row already exists, it is updated in place (no new
+          version) so repeated failures — e.g. transient AI quota errors — don't
+          accumulate dozens of rows.
+        - Otherwise a single failed row is created.
+        """
+        if self.has_current_completed_analysis(meeting_id):
+            log.warning(
+                "Meeting %s already has a completed report; not storing failure.",
+                meeting_id,
+            )
+            return {}
+
+        existing = (
+            self.client.table("mtg_analyses")
+            .select("id")
+            .eq("meeting_id", meeting_id)
+            .eq("is_current", True)
+            .eq("status", "failed")
+            .limit(1)
+            .execute()
+        ).data
+
+        if existing:
+            payload: Dict[str, Any] = {"status": "failed", "error_message": error_message}
+            for key, value in (
+                ("model_id", model_id),
+                ("prompt_version", prompt_version),
+                ("processing_time_ms", processing_time_ms),
+                ("ai_metadata", ai_metadata),
+            ):
+                if value is not None:
+                    payload[key] = value
+            result = (
+                self.client.table("mtg_analyses")
+                .update(payload)
+                .eq("id", existing[0]["id"])
+                .execute()
+            )
+            log.info("Updated existing failed analysis for meeting %s", meeting_id)
+            return result.data[0] if result.data else {}
+
+        return self.create_analysis(
+            meeting_id=meeting_id,
+            status="failed",
+            model_id=model_id,
+            prompt_version=prompt_version,
+            processing_time_ms=processing_time_ms,
+            ai_metadata=ai_metadata,
+            error_message=error_message,
+        )
+
     def get_today_current_report(self, on_date: date) -> Optional[Dict[str, Any]]:
         """Return the current completed L2 report for a meeting held ``on_date``."""
         start_utc, end_utc = day_bounds_utc(on_date, self.config.timezone_offset_hours)

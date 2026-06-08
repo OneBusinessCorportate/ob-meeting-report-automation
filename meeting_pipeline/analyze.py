@@ -66,9 +66,8 @@ def analyze_meeting(
     except Exception as exc:  # never let one meeting crash the run
         log.exception("Unexpected error analyzing meeting %s: %s", meeting["id"], exc)
         try:
-            analysis = repo.create_analysis(
+            analysis = repo.record_failed_analysis(
                 meeting_id=meeting["id"],
-                status="failed",
                 model_id=ai.model_id,
                 prompt_version=ai.prompt_version,
                 error_message=f"unexpected_error: {exc}",
@@ -91,9 +90,8 @@ def _analyze_meeting_inner(
             "Meeting %s has no full transcript; storing failed analysis.",
             meeting["id"],
         )
-        analysis = repo.create_analysis(
+        analysis = repo.record_failed_analysis(
             meeting_id=meeting["id"],
-            status="failed",
             model_id=ai.model_id,
             prompt_version=ai.prompt_version,
             error_message="transcript_not_found: raw_transcript.text is empty",
@@ -110,9 +108,8 @@ def _analyze_meeting_inner(
 
     if not result.ok:
         log.error("AI analysis failed for meeting %s: %s", meeting["id"], result.error)
-        analysis = repo.create_analysis(
+        analysis = repo.record_failed_analysis(
             meeting_id=meeting["id"],
-            status="failed",
             model_id=result.model_id,
             prompt_version=result.prompt_version,
             processing_time_ms=result.processing_time_ms,

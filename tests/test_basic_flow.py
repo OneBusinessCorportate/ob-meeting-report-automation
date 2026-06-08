@@ -512,6 +512,31 @@ def test_analyze_meeting_idempotent_skip():
     assert third["analysis"]["version"] == 2
 
 
+def test_record_failed_analysis_does_not_pile_up():
+    """Repeated failures update one row instead of creating many versions."""
+    repo = _repo()
+    meeting_id = str(uuid.uuid4())
+    a1 = repo.record_failed_analysis(meeting_id=meeting_id, error_message="429 quota")
+    a2 = repo.record_failed_analysis(meeting_id=meeting_id, error_message="503 busy")
+    rows = repo.client.store["mtg_analyses"]
+    failed_rows = [r for r in rows if r["meeting_id"] == meeting_id]
+    assert len(failed_rows) == 1  # updated in place, not piled up
+    assert a1["id"] == a2["id"]
+    assert failed_rows[0]["error_message"] == "503 busy"
+
+
+def test_record_failed_analysis_never_clobbers_completed():
+    """A failure must not overwrite an existing good report."""
+    repo = _repo()
+    meeting_id = str(uuid.uuid4())
+    repo.create_analysis(meeting_id=meeting_id, status="completed", summary="good")
+    result = repo.record_failed_analysis(meeting_id=meeting_id, error_message="429 quota")
+    assert result == {}  # not stored
+    assert repo.has_current_completed_analysis(meeting_id) is True
+    rows = [r for r in repo.client.store["mtg_analyses"] if r["meeting_id"] == meeting_id]
+    assert len(rows) == 1 and rows[0]["status"] == "completed"
+
+
 def test_analyze_meeting_missing_required_field_fails():
     repo = _repo()
     bad = {"summary": "", "topics": []}  # no summary / telegram_report_md
