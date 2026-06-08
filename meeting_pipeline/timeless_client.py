@@ -342,7 +342,13 @@ class TimelessClient:
         return "", segments
 
     # --- Diagnostics ----------------------------------------------------------
-    def probe(self, sample_meeting_id: Optional[str] = None) -> Dict[str, Any]:
+    def probe(
+        self,
+        sample_meeting_id: Optional[str] = None,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Live connectivity + endpoint-discovery check (uses the API key).
 
         Calls the configured listing endpoint and, if a meeting id is found (or
@@ -365,7 +371,12 @@ class TimelessClient:
 
         # 1) Listing endpoint.
         today = date.today().isoformat()
-        list_params = {"start_date": today, "end_date": today, "status": "completed", "limit": 100}
+        list_params = {
+            "start_date": start_date or today,
+            "end_date": end_date or today,
+            "status": "completed",
+            "limit": 100,
+        }
         resp = self._get(self.meetings_path, list_params)
         entry: Dict[str, Any] = {"path": self.meetings_path, "params": list_params}
         meeting_id = sample_meeting_id

@@ -38,7 +38,20 @@ def main() -> int:
         "--meeting-id",
         help="A known meeting id to test transcript endpoints against.",
     )
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=0,
+        help="Look back this many days when listing meetings (default 0 = today only). "
+        "Use e.g. 14 to find a recent completed meeting to test the transcript endpoint.",
+    )
     args = parser.parse_args()
+
+    from datetime import date, timedelta
+
+    today = date.today()
+    start_date = (today - timedelta(days=max(0, args.days_back))).isoformat()
+    end_date = today.isoformat()
 
     config = load_config()
     client = TimelessClient(config)
@@ -49,8 +62,16 @@ def main() -> int:
         )
         return 2
 
-    log.info("Probing Timeless API at %s (auth: %s) ...", client.base_url, client.auth_scheme)
-    report = client.probe(sample_meeting_id=args.meeting_id)
+    log.info(
+        "Probing Timeless API at %s (auth: %s) for meetings %s..%s ...",
+        client.base_url,
+        client.auth_scheme,
+        start_date,
+        end_date,
+    )
+    report = client.probe(
+        sample_meeting_id=args.meeting_id, start_date=start_date, end_date=end_date
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
 
     if report.get("ok"):
