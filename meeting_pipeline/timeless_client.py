@@ -135,11 +135,15 @@ class TimelessClient:
             return None
 
     def list_today_meetings(self, on_date: date) -> TimelessResult:
-        """Attempt to list completed meetings for ``on_date``.
+        """List completed meetings for a single day (convenience wrapper)."""
+        return self.list_meetings(on_date, on_date)
+
+    def list_meetings(self, start_date: date, end_date: date) -> TimelessResult:
+        """List completed meetings in the inclusive ``[start_date, end_date]`` range.
 
         Returns ``ok = False`` with the blocker message if not configured or
-        if the endpoint is unavailable — never raises. Follows pagination when
-        the API exposes a ``next`` cursor or ``page``-style metadata.
+        if the endpoint is unavailable — never raises. Follows the API's cursor
+        pagination (``next_cursor``) across pages.
         """
         if not self.is_configured:
             log.warning("Timeless API not configured (no TIMELESS_API_TOKEN).")
@@ -148,14 +152,19 @@ class TimelessClient:
         # Real Timeless API: GET /meetings?start_date=&end_date=&status=completed
         # (cursor pagination via next_cursor / cursor + limit).
         params = {
-            "start_date": on_date.isoformat(),
-            "end_date": on_date.isoformat(),
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
             "status": "completed",
             "limit": 100,
         }
         meetings, raw = self._list_all_pages(self.meetings_path, params)
         if meetings is not None:
-            log.info("Timeless returned %d meeting(s).", len(meetings))
+            log.info(
+                "Timeless returned %d meeting(s) for %s..%s.",
+                len(meetings),
+                start_date.isoformat(),
+                end_date.isoformat(),
+            )
             return TimelessResult(ok=True, meetings=meetings, raw=raw)
         return TimelessResult(ok=False, error=BLOCKER_MESSAGE)
 

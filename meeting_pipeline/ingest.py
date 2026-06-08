@@ -117,17 +117,100 @@ def ingest_from_file(
     }
 
 
+def _ingest_one_timeless_meeting(
+    repo: SupabaseRepo,
+    config: Config,
+    timeless: TimelessClient,
+    source: Dict[str, Any],
+    tm: Dict[str, Any],
+    fetched_at: str,
+) -> Optional[Dict[str, Any]]:
+    """Fetch the transcript for one Timeless meeting and upsert it. Never raises."""
+    meeting_id = str(tm.get("id") or tm.get("meeting_id") or "")
+    if not meeting_id:
+        return None
+
+    transcript = timeless.get_full_transcript(meeting_id)
+    if not transcript.ok or not transcript.transcript_text:
+        log.warning(
+            "Full transcript unavailable for Timeless meeting %s: %s",
+            meeting_id,
+            transcript.error,
+        )
+        # Record the meeting without a transcript so the gap is visible.
+        meeting = repo.upsert_meeting(
+            source_id=source["id"],
+            source_meeting_id=f"timeless_{meeting_id}",
+            title=tm.get("title") or "Утренняя планёрка бухгалтерии",
+            status="failed",
+            actual_start=tm.get("actual_start") or tm.get("start_time"),
+            actual_end=tm.get("actual_end") or tm.get("end_time"),
+            recording_url=tm.get("recording_url"),
+            source_fetched_at=fetched_at,
+            metadata={
+                "ingest_mode": "timeless_api",
+                "transcript_status": STATUS_TRANSCRIPT_NOT_FOUND,
+                "timeless_meeting_id": meeting_id,
+            },
+        )
+        return {"meeting": meeting, "status": STATUS_TRANSCRIPT_NOT_FOUND}
+
+    # Language is reported on the transcript response, not the listing.
+    language = (
+        (transcript.raw or {}).get("language")
+        or tm.get("language")
+        or config.default_language
+    )
+    raw_transcript = build_raw_transcript(
+        transcript.transcript_text,
+        language=language,
+        source="Timeless",
+        segments=transcript.segments,
+    )
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id=f"timeless_{meeting_id}",
+        title=tm.get("title") or "Утренняя планёрка бухгалтерии",
+        status="completed",
+        actual_start=tm.get("actual_start") or tm.get("start_time"),
+        actual_end=tm.get("actual_end") or tm.get("end_time"),
+        duration_seconds=tm.get("duration") or tm.get("duration_seconds"),
+        recording_url=tm.get("recording_url"),
+        transcript_language=language,
+        raw_transcript=raw_transcript,
+        raw_summary=tm.get("summary"),  # summary kept as ADDITIONAL raw only
+        source_fetched_at=fetched_at,
+        metadata={
+            "ingest_mode": "timeless_api",
+            "timeless_meeting_id": meeting_id,
+        },
+    )
+    return {"meeting": meeting, "status": STATUS_OK}
+
+
 def ingest_from_timeless(
     repo: SupabaseRepo,
     config: Config,
     timeless: TimelessClient,
     *,
     on_date: Optional[date] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
 ) -> Dict[str, Any]:
-    """Ingest today's completed meeting(s) from the Timeless API."""
-    on_date = on_date or parse_date(None, config.timezone_offset_hours)
+    """Ingest completed meeting(s) from the Timeless API.
 
-    listing = timeless.list_today_meetings(on_date)
+    Defaults to today; pass ``start_date``/``end_date`` to backfill a range
+    (inclusive). Each meeting is fetched and upserted one by one — a single bad
+    meeting never aborts the batch.
+    """
+    if start_date or end_date:
+        start = start_date or end_date
+        end = end_date or start_date
+    else:
+        on_date = on_date or parse_date(None, config.timezone_offset_hours)
+        start = end = on_date
+
+    listing = timeless.list_meetings(start, end)
     if not listing.ok:
         log.warning("Timeless listing unavailable: %s", listing.error)
         return {
@@ -136,11 +219,15 @@ def ingest_from_timeless(
             "detail": listing.error,
         }
     if not listing.meetings:
-        log.warning("Timeless returned no meetings for %s", on_date.isoformat())
+        log.warning(
+            "Timeless returned no meetings for %s..%s",
+            start.isoformat(),
+            end.isoformat(),
+        )
         return {
             "status": STATUS_RECORDING_NOT_FOUND,
             "ok": False,
-            "detail": "No Timeless meetings found for today.",
+            "detail": f"No Timeless meetings found for {start.isoformat()}..{end.isoformat()}.",
         }
 
     from datetime import timezone as _tz
@@ -149,71 +236,17 @@ def ingest_from_timeless(
     source = repo.ensure_source(config.default_source)
     ingested = []
     for tm in listing.meetings:
-        meeting_id = str(tm.get("id") or tm.get("meeting_id") or "")
-        if not meeting_id:
-            continue
-        transcript = timeless.get_full_transcript(meeting_id)
-        if not transcript.ok or not transcript.transcript_text:
-            log.warning(
-                "Full transcript unavailable for Timeless meeting %s: %s",
-                meeting_id,
-                transcript.error,
-            )
-            # Record the meeting without a transcript so the gap is visible.
-            meeting = repo.upsert_meeting(
-                source_id=source["id"],
-                source_meeting_id=f"timeless_{meeting_id}",
-                title=tm.get("title") or "Утренняя планёрка бухгалтерии",
-                status="failed",
-                recording_url=tm.get("recording_url"),
-                metadata={
-                    "ingest_mode": "timeless_api",
-                    "transcript_status": STATUS_TRANSCRIPT_NOT_FOUND,
-                    "timeless_meeting_id": meeting_id,
-                },
-            )
-            ingested.append(
-                {"meeting": meeting, "status": STATUS_TRANSCRIPT_NOT_FOUND}
-            )
-            continue
-
-        # Language is reported on the transcript response, not the listing.
-        language = (
-            (transcript.raw or {}).get("language")
-            or tm.get("language")
-            or config.default_language
-        )
-        raw_transcript = build_raw_transcript(
-            transcript.transcript_text,
-            language=language,
-            source="Timeless",
-            segments=transcript.segments,
-        )
-        meeting = repo.upsert_meeting(
-            source_id=source["id"],
-            source_meeting_id=f"timeless_{meeting_id}",
-            title=tm.get("title") or "Утренняя планёрка бухгалтерии",
-            status="completed",
-            actual_start=tm.get("actual_start") or tm.get("start_time"),
-            actual_end=tm.get("actual_end") or tm.get("end_time"),
-            duration_seconds=tm.get("duration") or tm.get("duration_seconds"),
-            recording_url=tm.get("recording_url"),
-            transcript_language=language,
-            raw_transcript=raw_transcript,
-            raw_summary=tm.get("summary"),  # summary kept as ADDITIONAL raw only
-            source_fetched_at=fetched_at,
-            metadata={
-                "ingest_mode": "timeless_api",
-                "timeless_meeting_id": meeting_id,
-            },
-        )
-        ingested.append({"meeting": meeting, "status": STATUS_OK})
+        item = _ingest_one_timeless_meeting(repo, config, timeless, source, tm, fetched_at)
+        if item is not None:
+            ingested.append(item)
 
     ok = any(item["status"] == STATUS_OK for item in ingested)
     return {
         "status": STATUS_OK if ok else STATUS_TRANSCRIPT_NOT_FOUND,
         "ok": ok,
         "ingested": ingested,
+        "count": len(ingested),
+        "saved": sum(1 for i in ingested if i["status"] == STATUS_OK),
     }
 
 
@@ -225,12 +258,17 @@ def ingest_meeting(
     date_str: Optional[str] = None,
     language: Optional[str] = None,
     source_meeting_id: Optional[str] = None,
+    days_back: int = 0,
+    start_date_str: Optional[str] = None,
+    end_date_str: Optional[str] = None,
     repo: Optional[SupabaseRepo] = None,
     timeless: Optional[TimelessClient] = None,
 ) -> Dict[str, Any]:
     """Top-level ingest entry point.
 
     Uses the local file when ``file_path`` is given; otherwise tries Timeless.
+    For Timeless, pass ``days_back`` (e.g. 14) or ``start_date_str``/``end_date_str``
+    to backfill a range; otherwise it ingests the given date (default: today).
     """
     repo = repo or SupabaseRepo(config)
     on_date = parse_date(date_str, config.timezone_offset_hours)
@@ -262,4 +300,25 @@ def ingest_meeting(
                 "unavailable, and no local --file fallback was provided."
             ),
         }
+
+    # Resolve an optional date range for backfilling.
+    start_date = end_date = None
+    if start_date_str or end_date_str:
+        start_date = parse_date(start_date_str, config.timezone_offset_hours) if start_date_str else None
+        end_date = parse_date(end_date_str, config.timezone_offset_hours) if end_date_str else None
+    elif days_back and days_back > 0:
+        from datetime import timedelta
+
+        end_date = on_date
+        start_date = on_date - timedelta(days=days_back)
+
+    if start_date or end_date:
+        log.info(
+            "Backfilling Timeless meetings for %s..%s",
+            (start_date or end_date).isoformat(),
+            (end_date or start_date).isoformat(),
+        )
+        return ingest_from_timeless(
+            repo, config, timeless, start_date=start_date, end_date=end_date
+        )
     return ingest_from_timeless(repo, config, timeless, on_date=on_date)

@@ -26,6 +26,7 @@ from meeting_pipeline.deliver import MISSING_REPORT_MESSAGE, deliver_today
 from meeting_pipeline.ingest import (
     build_raw_transcript,
     ingest_from_file,
+    ingest_from_timeless,
     ingest_meeting,
 )
 from meeting_pipeline.supabase_repo import SupabaseRepo
@@ -555,6 +556,88 @@ def test_telegram_sends_converted_bold():
     assert result.ok is True
     # GFM **bold** is converted to Telegram legacy *bold* on the wire.
     assert session.calls[0]["text"] == "📋 *Планёрка*\nГотово."
+
+
+class _TimelessResp:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload
+        self.headers = {}
+
+    def json(self):
+        return self._payload
+
+
+class _TimelessSeqSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def get(self, url, headers=None, params=None, timeout=None):
+        self.calls.append({"url": url, "params": params})
+        return self._responses.pop(0)
+
+
+def test_ingest_from_timeless_backfill_range():
+    """End-to-end: list a range from Timeless and upsert each meeting + transcript."""
+    from datetime import date
+
+    from meeting_pipeline.timeless_client import TimelessClient
+
+    config = Config(
+        supabase_url="http://fake",
+        supabase_service_role_key="fake",
+        timeless_api_token="tok",
+        timeless_api_base_url="https://api.timeless.test/v1",
+    )
+    repo = SupabaseRepo(config, client=FakeSupabaseClient())
+    session = _TimelessSeqSession(
+        [
+            # listing (one page, no more)
+            _TimelessResp(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "mtg_1",
+                            "title": "Планёрка 1",
+                            "start_time": "2026-06-01T07:00:00+00:00",
+                            "duration": 600,
+                        }
+                    ],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            ),
+            # transcript for mtg_1 (first template path hits)
+            _TimelessResp(
+                200,
+                {
+                    "meeting_id": "mtg_1",
+                    "language": "hy",
+                    "speakers": [{"id": "s1", "name": "Гор"}],
+                    "segments": [{"speaker_id": "s1", "text": "Начнём."}],
+                },
+            ),
+        ]
+    )
+    timeless = TimelessClient(config, session=session, sleep=lambda _s: None)
+
+    result = ingest_from_timeless(
+        repo, config, timeless, start_date=date(2026, 5, 25), end_date=date(2026, 6, 8)
+    )
+    assert result["ok"] is True
+    assert result["saved"] == 1
+    stored = repo.client.store["mtg_meetings"]
+    assert len(stored) == 1
+    row = stored[0]
+    assert row["status"] == "completed"
+    assert row["source_meeting_id"] == "timeless_mtg_1"
+    assert row["duration_seconds"] == 600
+    assert row["transcript_language"] == "hy"
+    assert "Гор: Начнём." in row["raw_transcript"]["text"]
+    # The listing used the documented date-range params.
+    assert session.calls[0]["params"]["start_date"] == "2026-05-25"
 
 
 def test_ingest_no_file_no_timeless_returns_recording_not_found():

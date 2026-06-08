@@ -32,6 +32,14 @@ def main() -> int:
         "--source-meeting-id",
         help="Override the source_meeting_id (dedup key).",
     )
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=0,
+        help="Backfill: ingest all completed Timeless meetings from the last N days.",
+    )
+    parser.add_argument("--start-date", help="Backfill range start (YYYY-MM-DD).")
+    parser.add_argument("--end-date", help="Backfill range end (YYYY-MM-DD).")
     args = parser.parse_args()
 
     config = load_config()
@@ -42,6 +50,9 @@ def main() -> int:
         date_str=args.date,
         language=args.language,
         source_meeting_id=args.source_meeting_id,
+        days_back=args.days_back,
+        start_date_str=args.start_date,
+        end_date_str=args.end_date,
     )
 
     log.info("Ingest result: status=%s ok=%s", result.get("status"), result.get("ok"))

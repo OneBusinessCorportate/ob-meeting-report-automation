@@ -184,6 +184,15 @@ def test_list_meetings_sends_real_query_params():
     assert params["status"] == "completed"
 
 
+def test_list_meetings_range_params():
+    client, _ = _client([FakeResp(200, {"data": [{"id": "1"}], "has_more": False})])
+    result = client.list_meetings(date(2026, 5, 25), date(2026, 6, 8))
+    assert result.ok is True
+    params = client._session.calls[0]["params"]
+    assert params["start_date"] == "2026-05-25"
+    assert params["end_date"] == "2026-06-08"
+
+
 def test_list_meetings_unavailable_returns_blocker():
     client, _ = _client([FakeResp(500), FakeResp(500), FakeResp(500), FakeResp(500),
                          FakeResp(500), FakeResp(500), FakeResp(500), FakeResp(500)])
