@@ -195,19 +195,38 @@ class SupabaseRepo:
         self, start_date: date, end_date: date
     ) -> List[Dict[str, Any]]:
         """Completed L1 meetings across an inclusive local-date range lacking a
-        current completed L2. Delegates per day to reuse the same matching logic.
+        current completed L2. Single range query (matched on ``actual_start``,
+        with an ``ingested_at`` fallback for rows that have no start time).
         """
-        from datetime import timedelta
+        start_utc, _ = day_bounds_utc(start_date, self.config.timezone_offset_hours)
+        _, end_utc = day_bounds_utc(end_date, self.config.timezone_offset_hours)
+
+        by_start = (
+            self.client.table("mtg_meetings")
+            .select("*")
+            .eq("status", "completed")
+            .gte("actual_start", start_utc.isoformat())
+            .lt("actual_start", end_utc.isoformat())
+            .execute()
+        ).data or []
+        by_ingest = (
+            self.client.table("mtg_meetings")
+            .select("*")
+            .eq("status", "completed")
+            .gte("ingested_at", start_utc.isoformat())
+            .lt("ingested_at", end_utc.isoformat())
+            .execute()
+        ).data or []
 
         seen: set = set()
         pending: List[Dict[str, Any]] = []
-        day = start_date
-        while day <= end_date:
-            for meeting in self.get_today_meetings_without_analysis(day):
-                if meeting["id"] not in seen:
-                    seen.add(meeting["id"])
-                    pending.append(meeting)
-            day += timedelta(days=1)
+        for meeting in by_start + by_ingest:
+            mid = meeting["id"]
+            if mid in seen:
+                continue
+            seen.add(mid)
+            if not self.has_current_completed_analysis(mid):
+                pending.append(meeting)
         return pending
 
     # --- Analyses (L2) --------------------------------------------------------

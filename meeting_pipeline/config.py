@@ -105,6 +105,12 @@ class Config:
     delivery_time: str = field(
         default_factory=lambda: _get("MEETING_DELIVERY_TIME", "11:00")
     )
+    # How many days back the daily run also re-checks for pending/failed meetings,
+    # so transient failures (e.g. AI quota) auto-recover on the next scheduled run
+    # without any manual command. 0 = today only.
+    analyze_lookback_days: int = field(
+        default_factory=lambda: int(_get("MEETING_ANALYZE_LOOKBACK_DAYS", "0"))
+    )
 
     # --- Interview / onboarding transcription (task II) ---
     # Supabase table that stores interview calls + full transcript + status.

@@ -88,11 +88,15 @@ def main() -> int:
     if not args.skip_analyze:
         log.info("=== STEP 2: ANALYZE ===")
         try:
+            # Look back MEETING_ANALYZE_LOOKBACK_DAYS so pending/failed meetings
+            # (e.g. blocked earlier by AI quota) are retried automatically on the
+            # next scheduled run — no manual command needed.
             analyze_result = analyze_pending(
                 config,
                 date_str=args.date,
                 source_meeting_id=args.source_meeting_id,
                 force=args.force,
+                days_back=config.analyze_lookback_days,
             )
             summary["analyze"] = {
                 "analyzed": analyze_result.get("analyzed"),
