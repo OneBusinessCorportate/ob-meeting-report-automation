@@ -35,6 +35,14 @@ def main() -> int:
         action="store_true",
         help="Re-analyze even if a current completed L2 report already exists.",
     )
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=0,
+        help="Analyze all pending meetings from the last N days (range mode).",
+    )
+    parser.add_argument("--start-date", help="Range start (YYYY-MM-DD).")
+    parser.add_argument("--end-date", help="Range end (YYYY-MM-DD).")
     args = parser.parse_args()
 
     config = load_config()
@@ -43,6 +51,9 @@ def main() -> int:
         date_str=args.date,
         source_meeting_id=args.source_meeting_id,
         force=args.force,
+        days_back=args.days_back,
+        start_date_str=args.start_date,
+        end_date_str=args.end_date,
     )
 
     log.info(

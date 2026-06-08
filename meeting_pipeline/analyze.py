@@ -158,13 +158,17 @@ def analyze_pending(
     date_str: Optional[str] = None,
     source_meeting_id: Optional[str] = None,
     force: bool = False,
+    days_back: int = 0,
+    start_date_str: Optional[str] = None,
+    end_date_str: Optional[str] = None,
     repo: Optional[SupabaseRepo] = None,
     ai: Optional[AIClient] = None,
 ) -> Dict[str, Any]:
-    """Analyze all pending meetings for a date, or one specific meeting.
+    """Analyze pending meetings for a date, a date range, or one specific meeting.
 
-    Safe to rerun: meetings that already have a current completed L2 report are
-    skipped unless ``force`` is set.
+    Pass ``days_back`` (e.g. 14) or ``start_date_str``/``end_date_str`` to process
+    a backfilled range in one call. Safe to rerun: meetings that already have a
+    current completed L2 report are skipped unless ``force`` is set.
     """
     repo = repo or SupabaseRepo(config)
     ai = ai or AIClient(config)
@@ -177,9 +181,22 @@ def analyze_pending(
             log.warning("No meeting found with source_meeting_id=%s", source_meeting_id)
     else:
         on_date: date = parse_date(date_str, config.timezone_offset_hours)
-        # The pending query already filters out meetings with a current report;
-        # with force we re-fetch everything completed for the day instead.
-        meetings = repo.get_today_meetings_without_analysis(on_date)
+        # Resolve an optional date range (backfill); otherwise just the one day.
+        start = end = None
+        if start_date_str or end_date_str:
+            start = parse_date(start_date_str, config.timezone_offset_hours) if start_date_str else on_date
+            end = parse_date(end_date_str, config.timezone_offset_hours) if end_date_str else on_date
+        elif days_back and days_back > 0:
+            from datetime import timedelta
+
+            end = on_date
+            start = on_date - timedelta(days=days_back)
+
+        if start or end:
+            meetings = repo.get_meetings_without_analysis_in_range(start or end, end or start)
+        else:
+            # The pending query already filters out meetings with a current report.
+            meetings = repo.get_today_meetings_without_analysis(on_date)
 
     results = [analyze_meeting(repo, ai, m, force=force) for m in meetings if m]
     completed = sum(1 for r in results if r["status"] == "completed")

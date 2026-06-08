@@ -191,6 +191,25 @@ class SupabaseRepo:
         )
         return pending
 
+    def get_meetings_without_analysis_in_range(
+        self, start_date: date, end_date: date
+    ) -> List[Dict[str, Any]]:
+        """Completed L1 meetings across an inclusive local-date range lacking a
+        current completed L2. Delegates per day to reuse the same matching logic.
+        """
+        from datetime import timedelta
+
+        seen: set = set()
+        pending: List[Dict[str, Any]] = []
+        day = start_date
+        while day <= end_date:
+            for meeting in self.get_today_meetings_without_analysis(day):
+                if meeting["id"] not in seen:
+                    seen.add(meeting["id"])
+                    pending.append(meeting)
+            day += timedelta(days=1)
+        return pending
+
     # --- Analyses (L2) --------------------------------------------------------
     def has_current_completed_analysis(self, meeting_id: str) -> bool:
         """True if the meeting already has a current, completed L2 report."""

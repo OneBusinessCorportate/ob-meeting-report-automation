@@ -450,6 +450,38 @@ def test_analyze_meeting_success():
     assert extras["criticized"][0]["name"] == "Армен Строй"
 
 
+def test_analyze_pending_range_processes_all_days():
+    """Range mode analyzes pending meetings across multiple days in one call."""
+    from datetime import date
+
+    from meeting_pipeline.analyze import analyze_pending
+
+    repo = _repo()
+    config = _config()
+    source = repo.ensure_source("timeless")
+    # Two completed meetings on different days, neither analyzed yet.
+    for day, smid in (("2026-03-24", "timeless_a"), ("2026-03-26", "timeless_b")):
+        repo.upsert_meeting(
+            source_id=source["id"],
+            source_meeting_id=smid,
+            title="Планёрка",
+            status="completed",
+            actual_start=f"{day}T07:00:00+00:00",
+            raw_transcript={"type": "full_transcript", "text": "transcript text"},
+        )
+    ai = AIClient(config, client=FakeAnthropic(report=SAMPLE_REPORT))
+    result = analyze_pending(
+        repo=repo,
+        config=config,
+        ai=ai,
+        start_date_str="2026-03-24",
+        end_date_str="2026-03-26",
+    )
+    assert result["analyzed"] == 2
+    assert result["completed"] == 2
+    assert result["failed"] == 0
+
+
 def test_analyze_meeting_idempotent_skip():
     repo = _repo()
     ai = AIClient(_config(), client=FakeAnthropic(report=SAMPLE_REPORT))
