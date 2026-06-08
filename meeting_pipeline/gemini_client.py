@@ -123,8 +123,11 @@ class _Messages:
             except Exception as exc:  # transient 429/5xx -> retry with backoff
                 message = str(exc)
                 retryable = any(m in message for m in _RETRYABLE_MARKERS)
-                # A hard "limit: 0" quota (model not on this tier) is not worth retrying.
-                if "limit: 0" in message or not retryable or attempt >= self._max_retries:
+                # Don't waste budget retrying hard quotas that won't clear soon:
+                #  - "limit: 0": model not available on this tier
+                #  - "PerDay": daily request cap hit (resets at midnight Pacific)
+                hard_quota = "limit: 0" in message or "PerDay" in message
+                if hard_quota or not retryable or attempt >= self._max_retries:
                     raise
                 delay = 2.0 ** attempt
                 log.warning(

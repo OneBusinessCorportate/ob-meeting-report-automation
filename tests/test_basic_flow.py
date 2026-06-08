@@ -811,6 +811,26 @@ def test_gemini_client_hard_quota_not_retried():
     assert slept == []
 
 
+def test_gemini_client_daily_quota_not_retried():
+    """A per-day free-tier cap must fail fast so it doesn't burn the budget."""
+    slept = []
+    fake = FakeGenaiClient(
+        SAMPLE_REPORT,
+        fail_times=99,
+        error="429 RESOURCE_EXHAUSTED ... GenerateRequestsPerDayPerProjectPerModel-FreeTier limit: 20",
+    )
+    client = GeminiClient(genai_client=fake, sleep=slept.append)
+    try:
+        client.messages.create(
+            model="gemini-2.5-flash", max_tokens=8192, messages=[{"role": "user", "content": "t"}]
+        )
+        assert False, "expected the daily-quota error to propagate"
+    except RuntimeError:
+        pass
+    assert fake.models.calls == 1  # no retries
+    assert slept == []
+
+
 def test_analyze_meeting_success_with_gemini():
     """End-to-end analyze using the Gemini adapter over a fake genai client."""
     repo = _repo()
