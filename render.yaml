@@ -23,7 +23,12 @@ services:
         sync: false
       - key: TIMELESS_API_BASE_URL
         value: https://api.timeless.day/v1
+      - key: AI_PROVIDER
+        value: anthropic
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Only needed when AI_PROVIDER=gemini:
+      - key: GEMINI_API_KEY
         sync: false
       - key: AI_MODEL_ID
         value: claude-sonnet-4-20250514

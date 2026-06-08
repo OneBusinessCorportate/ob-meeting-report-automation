@@ -24,6 +24,13 @@ def _get(name: str, default: Optional[str] = None) -> Optional[str]:
     return value or default
 
 
+# Default model per provider, applied when AI_MODEL_ID is not set explicitly.
+_DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-20250514",
+    "gemini": "gemini-2.5-pro",
+}
+
+
 @dataclass
 class Config:
     # --- Supabase (L1 / L2 storage) ---
@@ -42,13 +49,17 @@ class Config:
         )
     )
 
-    # --- AI (Anthropic) ---
+    # --- AI provider selection ---
+    # "anthropic" (default) or "gemini". Switches which SDK/key the AIClient uses.
+    ai_provider: str = field(default_factory=lambda: _get("AI_PROVIDER", "anthropic"))
     anthropic_api_key: Optional[str] = field(
         default_factory=lambda: _get("ANTHROPIC_API_KEY")
     )
-    ai_model_id: str = field(
-        default_factory=lambda: _get("AI_MODEL_ID", "claude-sonnet-4-20250514")
+    gemini_api_key: Optional[str] = field(
+        default_factory=lambda: _get("GEMINI_API_KEY")
     )
+    # Left as None when AI_MODEL_ID is unset; resolved per-provider in __post_init__.
+    ai_model_id: Optional[str] = field(default_factory=lambda: _get("AI_MODEL_ID"))
     ai_prompt_version: str = field(
         default_factory=lambda: _get("AI_PROMPT_VERSION", "full_transcript_prompt_v1")
     )
@@ -88,6 +99,14 @@ class Config:
     # Armenia is UTC+4 (no DST). Used for "today" boundaries and scheduling notes.
     timezone_offset_hours: int = 4
 
+    def __post_init__(self) -> None:
+        # Normalise the provider and fill the model default for that provider.
+        self.ai_provider = (self.ai_provider or "anthropic").strip().lower()
+        if not self.ai_model_id:
+            self.ai_model_id = _DEFAULT_MODELS.get(
+                self.ai_provider, _DEFAULT_MODELS["anthropic"]
+            )
+
     # --- Validation helpers ---------------------------------------------------
     @property
     def has_supabase(self) -> bool:
@@ -100,6 +119,15 @@ class Config:
     @property
     def has_anthropic(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def has_gemini(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    @property
+    def has_ai(self) -> bool:
+        """True when the selected provider has a usable key."""
+        return self.has_gemini if self.ai_provider == "gemini" else self.has_anthropic
 
     @property
     def has_telegram(self) -> bool:
@@ -118,6 +146,20 @@ class Config:
                 "Anthropic is not configured. Set ANTHROPIC_API_KEY in your "
                 "environment / .env file."
             )
+
+    def require_gemini(self) -> None:
+        if not self.has_gemini:
+            raise RuntimeError(
+                "Gemini is not configured. Set GEMINI_API_KEY in your "
+                "environment / .env file."
+            )
+
+    def require_ai(self) -> None:
+        """Validate the key for whichever provider is selected."""
+        if self.ai_provider == "gemini":
+            self.require_gemini()
+        else:
+            self.require_anthropic()
 
     def require_telegram(self) -> None:
         if not self.has_telegram:

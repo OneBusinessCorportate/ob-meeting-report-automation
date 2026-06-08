@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from meeting_pipeline.ai_client import AIClient
+from meeting_pipeline.gemini_client import GeminiClient
 from meeting_pipeline.analyze import analyze_meeting, extract_full_transcript
 from meeting_pipeline.config import Config
 from meeting_pipeline.deliver import MISSING_REPORT_MESSAGE, deliver_today
@@ -191,6 +192,32 @@ class FakeAnthropic:
             usage = _Usage()
 
         return _Resp()
+
+
+class FakeGenaiModels:
+    """Mimics ``genai.Client().models`` for the Gemini adapter."""
+
+    def __init__(self, report):
+        self._report = report
+        self.last_call = None
+
+    def generate_content(self, *, model, contents, config):
+        self.last_call = {"model": model, "contents": contents, "config": config}
+
+        class _UsageMeta:
+            prompt_token_count = 100
+            candidates_token_count = 50
+
+        class _Resp:
+            text = json.dumps(self._report)
+            usage_metadata = _UsageMeta()
+
+        return _Resp()
+
+
+class FakeGenaiClient:
+    def __init__(self, report):
+        self.models = FakeGenaiModels(report)
 
 
 class FakeResponse:
@@ -563,6 +590,73 @@ def test_deliver_today_missing_report_notifies():
     assert result["status"] == "report_not_found"
     assert len(session.calls) == 1
     assert MISSING_REPORT_MESSAGE in session.calls[0]["text"]
+
+
+def _gemini_config():
+    return Config(
+        supabase_url="http://fake",
+        supabase_service_role_key="fake",
+        ai_provider="gemini",
+        gemini_api_key="fake",
+        telegram_bot_token="fake",
+        telegram_management_chat_id="123",
+        timeless_api_token=None,
+    )
+
+
+def test_config_resolves_default_model_per_provider():
+    assert _config().ai_model_id == "claude-sonnet-4-20250514"
+    assert _gemini_config().ai_model_id == "gemini-2.5-pro"
+    # An explicit AI_MODEL_ID always wins over the per-provider default.
+    explicit = Config(ai_provider="gemini", ai_model_id="gemini-2.5-flash")
+    assert explicit.ai_model_id == "gemini-2.5-flash"
+
+
+def test_config_provider_validation():
+    cfg = _gemini_config()
+    assert cfg.has_ai is True
+    cfg.require_ai()  # must not raise
+    no_key = Config(ai_provider="gemini")
+    assert no_key.has_ai is False
+    try:
+        no_key.require_ai()
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "GEMINI_API_KEY" in str(exc)
+
+
+def test_gemini_client_adapts_response_shape():
+    """The Gemini wrapper must expose the Anthropic-style response contract."""
+    client = GeminiClient(genai_client=FakeGenaiClient(SAMPLE_REPORT))
+    resp = client.messages.create(
+        model="gemini-2.5-pro",
+        max_tokens=4096,
+        system="be grounded",
+        messages=[{"role": "user", "content": "transcript text"}],
+    )
+    assert resp.content[0].text  # .content[].text is read by AIClient
+    assert resp.usage.input_tokens == 100
+    assert resp.usage.output_tokens == 50
+
+
+def test_analyze_meeting_success_with_gemini():
+    """End-to-end analyze using the Gemini adapter over a fake genai client."""
+    repo = _repo()
+    fake_genai = FakeGenaiClient(SAMPLE_REPORT)
+    ai = AIClient(_gemini_config(), client=GeminiClient(genai_client=fake_genai))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "title": "Планёрка",
+        "raw_transcript": {"type": "full_transcript", "text": "long transcript text"},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is True
+    assert result["analysis"]["summary"] == SAMPLE_REPORT["summary"]
+    # System prompt + JSON mime hint must reach Gemini's request config.
+    cfg = fake_genai.models.last_call["config"]
+    assert cfg["system_instruction"]
+    assert cfg["response_mime_type"] == "application/json"
+    assert cfg["max_output_tokens"] == 4096
 
 
 # --------------------------------------------------------------------------- #

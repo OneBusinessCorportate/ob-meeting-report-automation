@@ -1,11 +1,16 @@
-"""Anthropic-based AI client that turns a full transcript into a structured L2 report.
+"""AI client that turns a full transcript into a structured L2 report.
+
+Supports two providers, selected via ``AI_PROVIDER`` (``anthropic`` default, or
+``gemini``). Both speak the same ``messages.create(...)`` contract — the Gemini
+backend is adapted in :mod:`meeting_pipeline.gemini_client`.
 
 The wrapper forces Russian output, grounded extraction (no invented facts) and
 a strict JSON response. If the model returns invalid JSON we surface a clear
 error so the caller can store a ``failed`` analysis (and, optionally, a safe
 fallback markdown) instead of crashing.
 
-Install requirement: ``anthropic>=0.39`` (see requirements.txt).
+Install requirement: ``anthropic>=0.39`` and/or ``google-genai>=1.0``
+(see requirements.txt).
 """
 from __future__ import annotations
 
@@ -67,8 +72,14 @@ class AIClient:
         self.config = config
         self.model_id = config.ai_model_id
         self.prompt_version = config.ai_prompt_version or prompt_v1.PROMPT_VERSION
+        self.provider = config.ai_provider
         if client is not None:
             self.client = client
+        elif self.provider == "gemini":
+            config.require_gemini()
+            from .gemini_client import GeminiClient  # imported lazily
+
+            self.client = GeminiClient(api_key=config.gemini_api_key)
         else:
             config.require_anthropic()
             from anthropic import Anthropic  # imported lazily
@@ -113,7 +124,7 @@ class AIClient:
                 messages=[{"role": "user", "content": user_prompt}],
             )
         except Exception as exc:
-            log.error("Anthropic API call failed: %s", exc)
+            log.error("%s API call failed: %s", self.provider, exc)
             return AnalysisResult(
                 ok=False,
                 error=f"AI request failed: {exc}",

@@ -149,8 +149,10 @@ Copy `.env.example` to `.env` and fill in:
 | `SUPABASE_SERVICE_ROLE_KEY`    | yes      | **Service-role** key (server-side only).                 |
 | `TIMELESS_API_TOKEN`           | no\*     | Timeless API token. If absent, use the `--file` fallback.|
 | `TIMELESS_API_BASE_URL`        | no       | Defaults to `https://api.timeless.day/v1`.               |
-| `ANTHROPIC_API_KEY`            | yes      | Anthropic API key (for the AI analysis step).            |
-| `AI_MODEL_ID`                  | no       | Defaults to `claude-sonnet-4-20250514`.                  |
+| `AI_PROVIDER`                  | no       | `anthropic` (default) or `gemini`.                       |
+| `ANTHROPIC_API_KEY`            | yes\*\*  | Anthropic API key. Required when `AI_PROVIDER=anthropic`.|
+| `GEMINI_API_KEY`               | yes\*\*  | Google Gemini API key. Required when `AI_PROVIDER=gemini`.|
+| `AI_MODEL_ID`                  | no       | Per-provider default: `claude-sonnet-4-20250514` / `gemini-2.5-pro`. |
 | `AI_PROMPT_VERSION`            | no       | Defaults to `full_transcript_prompt_v1`.                 |
 | `TELEGRAM_BOT_TOKEN`           | yes      | Telegram bot token.                                      |
 | `TELEGRAM_MANAGEMENT_CHAT_ID`  | yes      | Target chat id for the report.                           |
@@ -160,6 +162,9 @@ Copy `.env.example` to `.env` and fill in:
 
 \* Either a working Timeless API token **or** a local `--file` is required to
 get a transcript into the pipeline.
+
+\*\* Exactly one AI key is required, matching `AI_PROVIDER`: `ANTHROPIC_API_KEY`
+for `anthropic`, or `GEMINI_API_KEY` for `gemini`.
 
 > **Never commit real keys.** `.env` is git-ignored.
 
