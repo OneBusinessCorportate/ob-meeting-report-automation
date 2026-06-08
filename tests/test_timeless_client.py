@@ -174,6 +174,16 @@ def test_list_meetings_cursor_pagination():
     assert client._session.calls[1]["params"].get("cursor") == "CUR"
 
 
+def test_list_meetings_sends_real_query_params():
+    """Matches the documented Timeless API: start_date/end_date/status."""
+    client, _ = _client([FakeResp(200, {"data": [], "has_more": False})])
+    client.list_today_meetings(date(2026, 6, 8))
+    params = client._session.calls[0]["params"]
+    assert params["start_date"] == "2026-06-08"
+    assert params["end_date"] == "2026-06-08"
+    assert params["status"] == "completed"
+
+
 def test_list_meetings_unavailable_returns_blocker():
     client, _ = _client([FakeResp(500), FakeResp(500), FakeResp(500), FakeResp(500),
                          FakeResp(500), FakeResp(500), FakeResp(500), FakeResp(500)])
@@ -214,6 +224,34 @@ def test_get_full_transcript_builds_from_segments():
     result = client.get_full_transcript("ID1")
     assert result.ok is True
     assert "A: Привет" in result.transcript_text
+
+
+def test_get_full_transcript_resolves_speaker_ids():
+    """Real Timeless shape: segments reference speaker_id; speakers[] maps to names."""
+    client, _ = _client(
+        [
+            FakeResp(
+                200,
+                {
+                    "meeting_id": "mtg_1",
+                    "language": "hy",
+                    "speakers": [
+                        {"id": "spk_1", "name": "Гор"},
+                        {"id": "spk_2", "name": "Лилит"},
+                    ],
+                    "segments": [
+                        {"speaker_id": "spk_1", "text": "Начнём планёрку."},
+                        {"speaker_id": "spk_2", "text": "Готово."},
+                    ],
+                },
+            )
+        ]
+    )
+    result = client.get_full_transcript("mtg_1")
+    assert result.ok is True
+    assert "Гор: Начнём планёрку." in result.transcript_text
+    assert "Лилит: Готово." in result.transcript_text
+    assert (result.raw or {}).get("language") == "hy"
 
 
 # --------------------------------------------------------------------------- #

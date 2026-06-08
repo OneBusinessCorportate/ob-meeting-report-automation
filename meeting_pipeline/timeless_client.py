@@ -145,17 +145,18 @@ class TimelessClient:
             log.warning("Timeless API not configured (no TIMELESS_API_TOKEN).")
             return TimelessResult(ok=False, error=BLOCKER_MESSAGE)
 
-        path = self.meetings_path
-        # Plausible query-param shapes; we try them in order.
-        attempts = [
-            {"date": on_date.isoformat(), "status": "completed"},
-            {"day": on_date.isoformat()},
-        ]
-        for params in attempts:
-            meetings, raw = self._list_all_pages(path, params)
-            if meetings is not None:
-                log.info("Timeless returned %d meeting(s).", len(meetings))
-                return TimelessResult(ok=True, meetings=meetings, raw=raw)
+        # Real Timeless API: GET /meetings?start_date=&end_date=&status=completed
+        # (cursor pagination via next_cursor / cursor + limit).
+        params = {
+            "start_date": on_date.isoformat(),
+            "end_date": on_date.isoformat(),
+            "status": "completed",
+            "limit": 100,
+        }
+        meetings, raw = self._list_all_pages(self.meetings_path, params)
+        if meetings is not None:
+            log.info("Timeless returned %d meeting(s).", len(meetings))
+            return TimelessResult(ok=True, meetings=meetings, raw=raw)
         return TimelessResult(ok=False, error=BLOCKER_MESSAGE)
 
     def _list_all_pages(self, path: str, params: dict):
@@ -299,7 +300,11 @@ class TimelessClient:
     def _extract_transcript(data: Any):
         """Pull a plain-text transcript + segments out of a Timeless payload.
 
-        Tolerant of several shapes; returns ("", []) if nothing usable found.
+        The real Timeless transcript has no single text field: it is rebuilt by
+        joining ``segments[].text`` in order, resolving each ``segments[].speaker_id``
+        against the top-level ``speakers[]`` (id -> name) map. Still tolerant of
+        simpler shapes (a top-level text field, or segments with an inline
+        ``speaker`` name) so local-file and legacy payloads keep working.
         Never uses a 'summary' / 'tldr' field as the transcript.
         """
         segments: List[Dict[str, Any]] = []
@@ -308,13 +313,26 @@ class TimelessClient:
                 value = data.get(key)
                 if isinstance(value, str) and value.strip():
                     return value, data.get("segments", []) or []
+
+            # Build a speaker_id -> name lookup from the speakers array.
+            speaker_names: Dict[str, str] = {}
+            for sp in data.get("speakers") or []:
+                if isinstance(sp, dict) and sp.get("id") is not None:
+                    speaker_names[str(sp["id"])] = sp.get("name") or ""
+
             raw_segments = data.get("segments") or data.get("utterances")
             if isinstance(raw_segments, list) and raw_segments:
                 lines = []
                 for seg in raw_segments:
                     if not isinstance(seg, dict):
                         continue
-                    speaker = seg.get("speaker") or seg.get("speaker_name") or ""
+                    speaker = (
+                        speaker_names.get(str(seg.get("speaker_id")))
+                        or seg.get("speaker")
+                        or seg.get("speaker_name")
+                        or seg.get("speaker_id")
+                        or ""
+                    )
                     line = seg.get("text") or seg.get("content") or ""
                     if line:
                         lines.append(f"{speaker}: {line}".strip(": ").strip())
@@ -346,7 +364,8 @@ class TimelessClient:
             return report
 
         # 1) Listing endpoint.
-        list_params = {"date": date.today().isoformat(), "status": "completed"}
+        today = date.today().isoformat()
+        list_params = {"start_date": today, "end_date": today, "status": "completed", "limit": 100}
         resp = self._get(self.meetings_path, list_params)
         entry: Dict[str, Any] = {"path": self.meetings_path, "params": list_params}
         meeting_id = sample_meeting_id

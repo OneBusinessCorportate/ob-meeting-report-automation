@@ -177,9 +177,15 @@ def ingest_from_timeless(
             )
             continue
 
+        # Language is reported on the transcript response, not the listing.
+        language = (
+            (transcript.raw or {}).get("language")
+            or tm.get("language")
+            or config.default_language
+        )
         raw_transcript = build_raw_transcript(
             transcript.transcript_text,
-            language=tm.get("language") or config.default_language,
+            language=language,
             source="Timeless",
             segments=transcript.segments,
         )
@@ -190,9 +196,9 @@ def ingest_from_timeless(
             status="completed",
             actual_start=tm.get("actual_start") or tm.get("start_time"),
             actual_end=tm.get("actual_end") or tm.get("end_time"),
-            duration_seconds=tm.get("duration_seconds"),
+            duration_seconds=tm.get("duration") or tm.get("duration_seconds"),
             recording_url=tm.get("recording_url"),
-            transcript_language=tm.get("language") or config.default_language,
+            transcript_language=language,
             raw_transcript=raw_transcript,
             raw_summary=tm.get("summary"),  # summary kept as ADDITIONAL raw only
             source_fetched_at=fetched_at,
