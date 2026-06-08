@@ -143,6 +143,9 @@ def ingest_from_timeless(
             "detail": "No Timeless meetings found for today.",
         }
 
+    from datetime import timezone as _tz
+
+    fetched_at = datetime.now(_tz.utc).isoformat()
     source = repo.ensure_source(config.default_source)
     ingested = []
     for tm in listing.meetings:
@@ -192,6 +195,7 @@ def ingest_from_timeless(
             transcript_language=tm.get("language") or config.default_language,
             raw_transcript=raw_transcript,
             raw_summary=tm.get("summary"),  # summary kept as ADDITIONAL raw only
+            source_fetched_at=fetched_at,
             metadata={
                 "ingest_mode": "timeless_api",
                 "timeless_meeting_id": meeting_id,

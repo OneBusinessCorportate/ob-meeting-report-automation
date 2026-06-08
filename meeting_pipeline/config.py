@@ -48,6 +48,29 @@ class Config:
             "TIMELESS_API_BASE_URL", "https://api.timeless.day/v1"
         )
     )
+    # The exact Timeless endpoints/auth are not documented to us, so they are
+    # overridable from the environment — they can be corrected in Render without
+    # a code change once the real shapes are confirmed (see scripts/check_timeless.py).
+    # Auth header style: "bearer" -> Authorization: Bearer, "x-api-key" -> X-API-Key,
+    # "token" -> Authorization: Token.
+    timeless_auth_scheme: str = field(
+        default_factory=lambda: _get("TIMELESS_AUTH_SCHEME", "bearer")
+    )
+    # Listing endpoint (relative to base url) for completed meetings.
+    timeless_meetings_path: str = field(
+        default_factory=lambda: _get("TIMELESS_MEETINGS_PATH", "meetings")
+    )
+    # Comma-separated transcript path templates; "{id}" is substituted.
+    timeless_transcript_path_templates: str = field(
+        default_factory=lambda: _get(
+            "TIMELESS_TRANSCRIPT_PATH_TEMPLATES",
+            "meetings/{id}/transcript,meetings/{id}/transcript/full,transcripts/{id}",
+        )
+    )
+    # Retries for transient (network / 429 / 5xx) Timeless errors.
+    timeless_max_retries: int = field(
+        default_factory=lambda: int(_get("TIMELESS_MAX_RETRIES", "3"))
+    )
 
     # --- AI provider selection ---
     # "anthropic" (default) or "gemini". Switches which SDK/key the AIClient uses.

@@ -200,6 +200,20 @@ Only deliver:
 python scripts/deliver_report.py --date 2026-03-26
 ```
 
+Check Timeless API connectivity and discover the real endpoint shapes
+(uses `TIMELESS_API_TOKEN`; the token is never printed):
+
+```bash
+python scripts/check_timeless.py                 # probe listing + transcript endpoints
+python scripts/check_timeless.py --meeting-id ID # test transcript endpoints for a known id
+```
+
+It reports which paths return HTTP 200 and their top-level JSON keys. If the real
+API differs from the defaults, set `TIMELESS_MEETINGS_PATH`,
+`TIMELESS_TRANSCRIPT_PATH_TEMPLATES`, and/or `TIMELESS_AUTH_SCHEME` (no code change
+needed). The client retries transient errors (network / 429 / 5xx) with backoff —
+tune with `TIMELESS_MAX_RETRIES` — and follows cursor/page pagination on listings.
+
 Each script prints a JSON summary and exits non-zero on failure, which makes
 logs easy to read in cron output.
 

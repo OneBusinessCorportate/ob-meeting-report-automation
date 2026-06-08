@@ -90,6 +90,7 @@ class SupabaseRepo:
         raw_action_items: Optional[list] = None,
         raw_documents: Optional[list] = None,
         metadata: Optional[dict] = None,
+        source_fetched_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Insert or update a meeting, deduped by (source_id, source_meeting_id)."""
         payload: Dict[str, Any] = {
@@ -111,6 +112,7 @@ class SupabaseRepo:
             "raw_action_items": raw_action_items,
             "raw_documents": raw_documents,
             "metadata": metadata,
+            "source_fetched_at": source_fetched_at,
         }
         payload.update({k: v for k, v in optional.items() if v is not None})
 
