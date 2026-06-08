@@ -11,10 +11,28 @@ Install requirement: ``google-genai>=1.0`` (see requirements.txt).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
+
+from .utils import get_logger
+
+log = get_logger("meeting_pipeline.gemini")
 
 # Anthropic uses "assistant" for model turns; Gemini calls the same role "model".
 _ROLE_MAP = {"assistant": "model", "user": "user", "system": "user"}
+
+# Substrings that mark a transient, retryable error from the Gemini API.
+_RETRYABLE_MARKERS = (
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "RESOURCE_EXHAUSTED",
+    "UNAVAILABLE",
+    "INTERNAL",
+    "DEADLINE_EXCEEDED",
+)
 
 
 class _Block:
@@ -43,8 +61,16 @@ class _Response:
 class _Messages:
     """Implements the ``messages.create(...)`` call shape on top of Gemini."""
 
-    def __init__(self, genai_client: Any) -> None:
+    def __init__(
+        self,
+        genai_client: Any,
+        *,
+        max_retries: int = 4,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._client = genai_client
+        self._max_retries = max(0, max_retries)
+        self._sleep = sleep
 
     @staticmethod
     def _to_contents(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -81,12 +107,34 @@ class _Messages:
         }
         if system:
             config["system_instruction"] = system
+        # Gemini 2.5 models "think" by consuming output tokens before answering,
+        # which can starve/truncate the JSON. Disable thinking for this strict
+        # extraction task so the full budget goes to the structured report.
+        if "2.5" in model:
+            config["thinking_config"] = {"thinking_budget": 0}
 
-        response = self._client.models.generate_content(
-            model=model,
-            contents=self._to_contents(messages),
-            config=config,
-        )
+        contents = self._to_contents(messages)
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._client.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+                break
+            except Exception as exc:  # transient 429/5xx -> retry with backoff
+                message = str(exc)
+                retryable = any(m in message for m in _RETRYABLE_MARKERS)
+                # A hard "limit: 0" quota (model not on this tier) is not worth retrying.
+                if "limit: 0" in message or not retryable or attempt >= self._max_retries:
+                    raise
+                delay = 2.0 ** attempt
+                log.warning(
+                    "Gemini call failed (attempt %d/%d), retrying in %.0fs: %s",
+                    attempt + 1,
+                    self._max_retries + 1,
+                    delay,
+                    message.split(".")[0],
+                )
+                self._sleep(delay)
 
         text = getattr(response, "text", None) or ""
         meta = getattr(response, "usage_metadata", None)
@@ -104,9 +152,16 @@ class GeminiClient:
     ``google.genai.Client`` is created lazily from ``api_key``.
     """
 
-    def __init__(self, api_key: Optional[str] = None, *, genai_client: Any = None) -> None:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        *,
+        genai_client: Any = None,
+        max_retries: int = 4,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         if genai_client is None:
             from google import genai  # imported lazily; optional dependency
 
             genai_client = genai.Client(api_key=api_key)
-        self.messages = _Messages(genai_client)
+        self.messages = _Messages(genai_client, max_retries=max_retries, sleep=sleep)

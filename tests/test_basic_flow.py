@@ -196,14 +196,24 @@ class FakeAnthropic:
 
 
 class FakeGenaiModels:
-    """Mimics ``genai.Client().models`` for the Gemini adapter."""
+    """Mimics ``genai.Client().models`` for the Gemini adapter.
 
-    def __init__(self, report):
+    ``fail_times`` makes the first N calls raise a transient error so retry
+    behaviour can be exercised.
+    """
+
+    def __init__(self, report, fail_times=0, error="503 UNAVAILABLE"):
         self._report = report
         self.last_call = None
+        self.calls = 0
+        self._fail_times = fail_times
+        self._error = error
 
     def generate_content(self, *, model, contents, config):
+        self.calls += 1
         self.last_call = {"model": model, "contents": contents, "config": config}
+        if self._fail_times and self.calls <= self._fail_times:
+            raise RuntimeError(self._error)
 
         class _UsageMeta:
             prompt_token_count = 100
@@ -217,8 +227,8 @@ class FakeGenaiModels:
 
 
 class FakeGenaiClient:
-    def __init__(self, report):
-        self.models = FakeGenaiModels(report)
+    def __init__(self, report, fail_times=0, error="503 UNAVAILABLE"):
+        self.models = FakeGenaiModels(report, fail_times=fail_times, error=error)
 
 
 class FakeResponse:
@@ -754,6 +764,53 @@ def test_gemini_client_adapts_response_shape():
     assert resp.usage.output_tokens == 50
 
 
+def test_gemini_client_disables_thinking_for_25_models():
+    """2.5 models must run with thinking disabled so JSON isn't truncated."""
+    fake = FakeGenaiClient(SAMPLE_REPORT)
+    client = GeminiClient(genai_client=fake)
+    client.messages.create(
+        model="gemini-2.5-flash",
+        max_tokens=8192,
+        messages=[{"role": "user", "content": "t"}],
+    )
+    cfg = fake.models.last_call["config"]
+    assert cfg["thinking_config"] == {"thinking_budget": 0}
+    assert cfg["max_output_tokens"] == 8192
+
+
+def test_gemini_client_retries_transient_then_succeeds():
+    """503/429 errors are retried with backoff (sleep injected as no-op)."""
+    slept = []
+    fake = FakeGenaiClient(SAMPLE_REPORT, fail_times=2, error="503 UNAVAILABLE high demand")
+    client = GeminiClient(genai_client=fake, sleep=slept.append)
+    resp = client.messages.create(
+        model="gemini-2.5-flash",
+        max_tokens=8192,
+        messages=[{"role": "user", "content": "t"}],
+    )
+    assert json.loads(resp.content[0].text)["summary"] == SAMPLE_REPORT["summary"]
+    assert fake.models.calls == 3  # 2 failures + 1 success
+    assert len(slept) == 2
+
+
+def test_gemini_client_hard_quota_not_retried():
+    """A 'limit: 0' quota (model not on tier) must fail fast, not retry."""
+    slept = []
+    fake = FakeGenaiClient(
+        SAMPLE_REPORT, fail_times=99, error="429 RESOURCE_EXHAUSTED limit: 0"
+    )
+    client = GeminiClient(genai_client=fake, sleep=slept.append)
+    try:
+        client.messages.create(
+            model="gemini-2.5-pro", max_tokens=8192, messages=[{"role": "user", "content": "t"}]
+        )
+        assert False, "expected the hard-quota error to propagate"
+    except RuntimeError:
+        pass
+    assert fake.models.calls == 1  # no retries
+    assert slept == []
+
+
 def test_analyze_meeting_success_with_gemini():
     """End-to-end analyze using the Gemini adapter over a fake genai client."""
     repo = _repo()
@@ -771,7 +828,7 @@ def test_analyze_meeting_success_with_gemini():
     cfg = fake_genai.models.last_call["config"]
     assert cfg["system_instruction"]
     assert cfg["response_mime_type"] == "application/json"
-    assert cfg["max_output_tokens"] == 4096
+    assert cfg["max_output_tokens"] == 8192
 
 
 # --------------------------------------------------------------------------- #

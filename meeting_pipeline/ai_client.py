@@ -95,7 +95,7 @@ class AIClient:
         language: Optional[str] = None,
         time_range: Optional[str] = None,
         participants: Optional[List[str]] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
     ) -> AnalysisResult:
         """Generate a structured L2 report from the FULL transcript."""
         if not transcript_text or not transcript_text.strip():
