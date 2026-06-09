@@ -59,6 +59,10 @@ class TimelessClient:
             for t in (config.timeless_transcript_path_templates or "").split(",")
             if t.strip()
         ] or ["meetings/{id}/transcript"]
+        self.start_param = config.timeless_start_param or "start_date"
+        self.end_param = config.timeless_end_param or "end_date"
+        # ``timeless_status_filter`` may be an explicit empty string -> omit it.
+        self.status_filter = (config.timeless_status_filter or "").strip()
         self.max_retries = max(0, int(config.timeless_max_retries or 0))
         self._sleep = sleep  # injectable so tests don't actually wait
         if session is not None:
@@ -149,14 +153,17 @@ class TimelessClient:
             log.warning("Timeless API not configured (no TIMELESS_API_TOKEN).")
             return TimelessResult(ok=False, error=BLOCKER_MESSAGE)
 
-        # Real Timeless API: GET /meetings?start_date=&end_date=&status=completed
-        # (cursor pagination via next_cursor / cursor + limit).
+        # Real Timeless API: GET /meetings?<start>=&<end>=&status=completed
+        # (cursor pagination via next_cursor / cursor + limit). The param names
+        # and status value are configurable because the API is undocumented to
+        # us — see scripts/debug_timeless_api.py to discover the right ones.
         params = {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "status": "completed",
+            self.start_param: start_date.isoformat(),
+            self.end_param: end_date.isoformat(),
             "limit": 100,
         }
+        if self.status_filter:
+            params["status"] = self.status_filter
         meetings, raw = self._list_all_pages(self.meetings_path, params)
         if meetings is not None:
             log.info(
@@ -351,6 +358,228 @@ class TimelessClient:
         return "", segments
 
     # --- Diagnostics ----------------------------------------------------------
+    # Candidate date param-name pairs to try when the configured ones return 0.
+    # Order matters only for reporting; each is tried independently.
+    _DATE_PARAM_CANDIDATES = [
+        ("start_date", "end_date"),
+        ("from", "to"),
+        ("start", "end"),
+        ("date_from", "date_to"),
+        ("created_after", "created_before"),
+        ("after", "before"),
+        ("from_date", "to_date"),
+        ("since", "until"),
+    ]
+
+    def diagnose_listing(
+        self, start_date: date, end_date: date
+    ) -> Dict[str, Any]:
+        """Safe, read-only diagnosis of why the listing endpoint returns 0.
+
+        Runs a matrix of GET requests against the meetings endpoint — varying the
+        date param names, the status filter, and (only if auth fails) the auth
+        scheme — and reports the HTTP status, top-level JSON keys, the detected
+        list key, the meeting count, and any pagination markers for each. Never
+        raises and NEVER prints/returns the token (only whether one is present
+        and its length). Intended for ``scripts/debug_timeless_api.py``.
+        """
+        token = self.token or ""
+        report: Dict[str, Any] = {
+            "token_present": bool(token),
+            "token_length": len(token),
+            "base_url": self.base_url,
+            "meetings_path": self.meetings_path,
+            "auth_scheme": self.auth_scheme,
+            "configured_url": f"{self.base_url}/{self.meetings_path.lstrip('/')}",
+            "configured_start_param": self.start_param,
+            "configured_end_param": self.end_param,
+            "configured_status_filter": self.status_filter or "(none)",
+            "date_range": f"{start_date.isoformat()}..{end_date.isoformat()}",
+            "variants": [],
+            "auth_scheme_probes": [],
+            "diagnosis": None,
+        }
+        if not self.is_configured:
+            report["diagnosis"] = (
+                "Not configured: set TIMELESS_API_TOKEN (and TIMELESS_API_BASE_URL "
+                "if not using the default)."
+            )
+            return report
+
+        s, e = start_date.isoformat(), end_date.isoformat()
+
+        # 1) Baseline: exactly what the real ingest path sends.
+        baseline_params = {
+            self.start_param: s,
+            self.end_param: e,
+            "limit": 100,
+        }
+        if self.status_filter:
+            baseline_params["status"] = self.status_filter
+        baseline = self._probe_variant("configured (used by ingest)", baseline_params)
+        report["variants"].append(baseline)
+
+        # If auth is failing, the param matrix is pointless — probe schemes instead.
+        if baseline.get("status") in (401, 403):
+            report["auth_scheme_probes"] = self._probe_auth_schemes(baseline_params)
+            report["diagnosis"] = self._auth_diagnosis(report["auth_scheme_probes"])
+            return report
+
+        # 2) Same date params but WITHOUT the status filter.
+        if self.status_filter:
+            report["variants"].append(
+                self._probe_variant(
+                    "configured date params, NO status filter",
+                    {self.start_param: s, self.end_param: e, "limit": 100},
+                )
+            )
+
+        # 3) NO params at all (what does the endpoint return by default?).
+        report["variants"].append(self._probe_variant("no params (raw listing)", {}))
+
+        # 4) Every candidate date param-name pair (no status filter, to isolate
+        #    the date-param question from the status question).
+        for sp, ep in self._DATE_PARAM_CANDIDATES:
+            if (sp, ep) == (self.start_param, self.end_param):
+                continue  # already covered by the baseline / no-status variant
+            report["variants"].append(
+                self._probe_variant(
+                    f"date params: {sp}/{ep} (no status)",
+                    {sp: s, ep: e, "limit": 100},
+                )
+            )
+
+        report["diagnosis"] = self._listing_diagnosis(report["variants"])
+        return report
+
+    def _probe_variant(self, label: str, params: dict) -> Dict[str, Any]:
+        """One safe GET; returns a structured, token-free summary."""
+        entry: Dict[str, Any] = {"label": label, "params": dict(params)}
+        resp = self._get(self.meetings_path, params)
+        if resp is None:
+            entry["status"] = None
+            entry["result"] = "no response (network error after retries)"
+            return entry
+        entry["status"] = resp.status_code
+        keys, parsed = self._safe_keys(resp)
+        entry["json_keys"] = keys
+        if resp.status_code != 200:
+            entry["error_excerpt"] = self._error_excerpt(parsed, resp)
+            entry["count"] = None
+            return entry
+        meetings = self._extract_meetings(parsed) if parsed is not None else None
+        entry["list_key"] = self._detect_list_key(parsed)
+        entry["count"] = len(meetings) if meetings is not None else None
+        entry["pagination"] = self._pagination_markers(parsed)
+        return entry
+
+    def _probe_auth_schemes(self, params: dict) -> List[Dict[str, Any]]:
+        """Try each auth header style; report which yields a non-401/403."""
+        probes: List[Dict[str, Any]] = []
+        original = self.auth_scheme
+        try:
+            for scheme in ("bearer", "x-api-key", "token"):
+                self.auth_scheme = scheme
+                resp = self._get(self.meetings_path, params)
+                probe = {"auth_scheme": scheme}
+                if resp is None:
+                    probe["status"] = None
+                    probe["result"] = "no response (network error)"
+                else:
+                    probe["status"] = resp.status_code
+                probes.append(probe)
+        finally:
+            self.auth_scheme = original
+        return probes
+
+    @staticmethod
+    def _detect_list_key(data: Any) -> Optional[str]:
+        if isinstance(data, list):
+            return "<top-level list>"
+        if isinstance(data, dict):
+            for key in ("meetings", "data", "results", "items"):
+                if isinstance(data.get(key), list):
+                    return key
+        return None
+
+    @staticmethod
+    def _pagination_markers(data: Any) -> Dict[str, Any]:
+        """Surface any pagination-looking fields so the caller can confirm them."""
+        markers: Dict[str, Any] = {}
+        if isinstance(data, dict):
+            for key in (
+                "next_cursor", "nextCursor", "next", "cursor",
+                "has_more", "hasMore", "page", "total_pages", "totalPages",
+                "total", "count", "limit", "offset",
+            ):
+                if key in data:
+                    markers[key] = data[key]
+        return markers
+
+    @staticmethod
+    def _error_excerpt(parsed: Any, resp: Any) -> str:
+        """A short, safe excerpt of a non-200 body (never contains the token)."""
+        if isinstance(parsed, (dict, list)):
+            import json as _json
+
+            try:
+                return _json.dumps(parsed, ensure_ascii=False)[:300]
+            except Exception:
+                return str(parsed)[:300]
+        text = getattr(resp, "text", "") or ""
+        return text[:300]
+
+    @staticmethod
+    def _auth_diagnosis(probes: List[Dict[str, Any]]) -> str:
+        working = [p["auth_scheme"] for p in probes if p.get("status") not in (None, 401, 403)]
+        if working:
+            return (
+                "AUTH: the configured auth scheme was rejected (401/403), but "
+                f"scheme(s) {working} were accepted. Set TIMELESS_AUTH_SCHEME to "
+                f"'{working[0]}'."
+            )
+        return (
+            "AUTH BLOCKER: every auth scheme (bearer / x-api-key / token) returned "
+            "401/403. The TIMELESS_API_TOKEN is likely invalid, expired, or lacks "
+            "API access for this workspace. Re-issue the token in Timeless."
+        )
+
+    @staticmethod
+    def _listing_diagnosis(variants: List[Dict[str, Any]]) -> str:
+        # Any variant that actually returned meetings?
+        winners = [
+            v for v in variants
+            if isinstance(v.get("count"), int) and v["count"] > 0
+        ]
+        if winners:
+            best = max(winners, key=lambda v: v["count"])
+            return (
+                f"MEETINGS FOUND via variant '{best['label']}' "
+                f"({best['count']} meeting(s), list key: {best.get('list_key')}). "
+                f"Set the Timeless env params to match this variant — params used: "
+                f"{best['params']}. If this differs from the 'configured' variant, "
+                f"the ingest call was using the wrong param names/status."
+            )
+        # Did anything 200 at all?
+        any_200 = [v for v in variants if v.get("status") == 200]
+        if not any_200:
+            statuses = sorted({v.get("status") for v in variants})
+            return (
+                f"No variant returned HTTP 200 (statuses seen: {statuses}). The "
+                "endpoint/auth is wrong or the API is unreachable."
+            )
+        # Everything 200 but 0 meetings under every shape.
+        return (
+            "Timeless API does not expose meetings for this token/workspace/date "
+            "range. Every request returned HTTP 200 but 0 meetings across all date "
+            "param names and with/without the status filter. Verify in the Timeless "
+            "UI that these meetings belong to THIS token's workspace, that the API "
+            "token has access to them, and that the date range matches the meeting "
+            "dates (timezone). They may also be exposed under a different resource "
+            "than the meetings listing (e.g. only via a share link / transcript "
+            "endpoint)."
+        )
+
     def probe(
         self,
         sample_meeting_id: Optional[str] = None,
@@ -381,11 +610,12 @@ class TimelessClient:
         # 1) Listing endpoint.
         today = date.today().isoformat()
         list_params = {
-            "start_date": start_date or today,
-            "end_date": end_date or today,
-            "status": "completed",
+            self.start_param: start_date or today,
+            self.end_param: end_date or today,
             "limit": 100,
         }
+        if self.status_filter:
+            list_params["status"] = self.status_filter
         resp = self._get(self.meetings_path, list_params)
         entry: Dict[str, Any] = {"path": self.meetings_path, "params": list_params}
         meeting_id = sample_meeting_id

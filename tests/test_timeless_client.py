@@ -288,6 +288,97 @@ def test_probe_not_configured():
 
 
 # --------------------------------------------------------------------------- #
+# Configurable params (env-overridable date param names + status filter)
+# --------------------------------------------------------------------------- #
+def test_status_filter_can_be_omitted():
+    client, _ = _client(
+        [FakeResp(200, {"data": []})], timeless_status_filter=""
+    )
+    client.list_today_meetings(date(2026, 6, 8))
+    params = client._session.calls[0]["params"]
+    assert "status" not in params
+
+
+def test_custom_date_param_names():
+    client, _ = _client(
+        [FakeResp(200, {"data": [{"id": "1"}]})],
+        timeless_start_param="from",
+        timeless_end_param="to",
+    )
+    client.list_meetings(date(2026, 5, 26), date(2026, 6, 9))
+    params = client._session.calls[0]["params"]
+    assert params["from"] == "2026-05-26"
+    assert params["to"] == "2026-06-09"
+    assert "start_date" not in params
+
+
+# --------------------------------------------------------------------------- #
+# diagnose_listing — the debug_timeless_api.py engine
+# --------------------------------------------------------------------------- #
+def test_diagnose_never_exposes_token():
+    client, _ = _client([FakeResp(200, {"data": []})] * 20)
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    blob = repr(report)
+    assert "secret-token" not in blob
+    assert report["token_present"] is True
+    assert report["token_length"] == len("secret-token")
+
+
+def test_diagnose_reports_winning_variant():
+    # Baseline (start_date/end_date) returns 0; the from/to variant returns 1.
+    def resp_for(call):
+        params = call.get("params") or {}
+        if "from" in params:
+            return FakeResp(200, {"meetings": [{"id": "M1"}]})
+        return FakeResp(200, {"meetings": []})
+
+    class RoutingSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None, timeout=None):
+            call = {"url": url, "headers": headers, "params": params}
+            self.calls.append(call)
+            return resp_for(call)
+
+    client = TimelessClient(_config(), session=RoutingSession(), sleep=lambda *_: None)
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert "MEETINGS FOUND" in report["diagnosis"]
+    assert "from" in report["diagnosis"]
+
+
+def test_diagnose_all_zero_emits_clear_blocker():
+    client, _ = _client([FakeResp(200, {"meetings": []})] * 30)
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert "does not expose meetings for this token/workspace/date range" in report["diagnosis"]
+
+
+def test_diagnose_auth_failure_probes_schemes():
+    # Configured scheme 401s; the auth-scheme probes then also 401 -> auth blocker.
+    client, _ = _client([FakeResp(401)] * 10)
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert report["auth_scheme_probes"]
+    assert "AUTH BLOCKER" in report["diagnosis"]
+
+
+def test_diagnose_detects_pagination_markers():
+    client, _ = _client(
+        [FakeResp(200, {"meetings": [{"id": "1"}], "next_cursor": "C", "total": 5})] * 30
+    )
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    baseline = report["variants"][0]
+    assert baseline["pagination"].get("next_cursor") == "C"
+    assert baseline["pagination"].get("total") == 5
+
+
+def test_diagnose_not_configured():
+    client = TimelessClient(_config(timeless_api_token=None))
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert report["token_present"] is False
+    assert "Not configured" in report["diagnosis"]
+
+
+# --------------------------------------------------------------------------- #
 # Manual runner
 # --------------------------------------------------------------------------- #
 def _run_all():

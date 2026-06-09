@@ -214,6 +214,29 @@ API differs from the defaults, set `TIMELESS_MEETINGS_PATH`,
 needed). The client retries transient errors (network / 429 / 5xx) with backoff —
 tune with `TIMELESS_MAX_RETRIES` — and follows cursor/page pagination on listings.
 
+**Debug "Timeless returned 0 meeting(s)"** — when the listing succeeds (HTTP 200)
+but comes back empty even though meetings exist in the Timeless UI, run the safe,
+read-only debugger (GET only, **never prints the token**):
+
+```bash
+python scripts/debug_timeless_api.py --start-date 2026-05-26 --end-date 2026-06-09
+python scripts/debug_timeless_api.py --days-back 14
+```
+
+It reports whether the token is present (length only), the exact URL/status, the
+raw response keys + detected list key + meeting count, any pagination markers,
+and then **tries a matrix of variants** — the configured params, the same params
+without the status filter, no params, and every common date param-name pair
+(`from`/`to`, `start`/`end`, `created_after`/`created_before`, `since`/`until`,
+…). If auth is rejected it also probes the three auth schemes. The final
+`diagnosis` line tells you exactly which env var to set:
+
+- A variant returned meetings → set `TIMELESS_START_PARAM`/`TIMELESS_END_PARAM`
+  (and/or clear `TIMELESS_STATUS_FILTER=`) to match it.
+- Auth was rejected → fix `TIMELESS_AUTH_SCHEME` or re-issue the token.
+- Every variant returned 200 + 0 meetings → the API genuinely exposes no
+  meetings for this token/workspace/date range (see Troubleshooting below).
+
 Each script prints a JSON summary and exits non-zero on failure, which makes
 logs easy to read in cron output.
 
@@ -274,6 +297,39 @@ the steps. One combined job is fine for the MVP.
 - This is treated as a **blocker** by design — we never fabricate a transcript
   from the summary. Use the local `--file` fallback so the rest of the pipeline
   still runs.
+
+**Timeless returns 0 meetings (but meetings exist in the UI)**
+- Symptom: the run is otherwise healthy (Supabase connects, Telegram sends
+  "report not found"), but the log shows
+  `Timeless returned 0 meeting(s) for <start>..<end>` and the ingest result is
+  `recording_not_found`.
+- The endpoint itself is confirmed reachable: `GET https://api.timeless.day/v1/meetings`
+  responds `401` without a valid token (it is *not* a 404), so a 200-but-empty
+  response means **auth is fine and the query is returning nothing** — usually a
+  param-shape mismatch, the status filter, or a workspace/date-range issue, not a
+  wrong URL.
+- Debug it without leaking the token:
+
+  ```bash
+  python scripts/debug_timeless_api.py --start-date 2026-05-26 --end-date 2026-06-09
+  ```
+
+  Then act on the `diagnosis`:
+  - **A date param variant returned meetings** → the API ignores
+    `start_date`/`end_date`. Set `TIMELESS_START_PARAM` / `TIMELESS_END_PARAM`
+    (e.g. `from` / `to`) to the winning pair in Render. No code change needed.
+  - **"NO status filter" returned meetings** → the meetings aren't tagged
+    `completed`. Set `TIMELESS_STATUS_FILTER=` (empty) to drop the filter, or set
+    it to the correct value.
+  - **AUTH BLOCKER / a different scheme worked** → set `TIMELESS_AUTH_SCHEME`
+    (`bearer` | `x-api-key` | `token`) to the accepted scheme, or re-issue the
+    token if all schemes 401/403.
+  - **Every variant returned 200 + 0 meetings** → the documented blocker:
+    `Timeless API does not expose meetings for this token/workspace/date range`.
+    Confirm the meetings belong to **this token's workspace**, that the token has
+    API access to them, and that the date range matches the meeting dates
+    (Armenia is UTC+4 — a UTC range can miss edge-of-day meetings). Until the
+    API exposes them, use the local `--file` fallback.
 
 **AI failed**
 - Causes: API/network error, or the model returned invalid JSON.

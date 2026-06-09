@@ -67,6 +67,22 @@ class Config:
             "meetings/{id}/transcript,meetings/{id}/transcript/full,transcripts/{id}",
         )
     )
+    # Query-param names used when listing meetings by date range. The real
+    # Timeless API param names are not documented to us, so they are overridable
+    # from the environment — run `scripts/debug_timeless_api.py` to discover the
+    # names that actually return meetings (e.g. "from"/"to", "created_after").
+    timeless_start_param: str = field(
+        default_factory=lambda: _get("TIMELESS_START_PARAM", "start_date")
+    )
+    timeless_end_param: str = field(
+        default_factory=lambda: _get("TIMELESS_END_PARAM", "end_date")
+    )
+    # Value sent as the meeting status filter. Set to empty (TIMELESS_STATUS_FILTER=)
+    # to omit the filter entirely — some workspaces/endpoints 200-but-return-0
+    # when this value is wrong. Read raw so an explicit empty string is honoured.
+    timeless_status_filter: str = field(
+        default_factory=lambda: os.environ.get("TIMELESS_STATUS_FILTER", "completed").strip()
+    )
     # Retries for transient (network / 429 / 5xx) Timeless errors.
     timeless_max_retries: int = field(
         default_factory=lambda: int(_get("TIMELESS_MAX_RETRIES", "3"))
