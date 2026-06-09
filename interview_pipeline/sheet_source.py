@@ -58,7 +58,8 @@ class SheetCandidate:
     phone: Optional[str] = None
     contact_raw: Optional[str] = None
     resume_comment: Optional[str] = None
-    sheet_status: Optional[str] = None
+    sheet_status: Optional[str] = None        # test/process status (1st «Статус»)
+    decision_status: Optional[str] = None     # final hiring decision (2nd «Статус»)
     grade_start: Optional[str] = None
     test_score: Optional[float] = None
     test_sent_at: Optional[str] = None       # ISO date
@@ -160,13 +161,33 @@ def _col(header_map: Dict[str, int], *needles: str) -> Optional[int]:
     return None
 
 
+def _status_columns(header: List[Any]) -> List[int]:
+    """All column indices whose header is «Статус», in order.
+
+    The «Бух»/«Консультант»/«Юрист» tabs each have TWO columns literally named
+    «Статус»: the 1st is the test/process status, the 2nd is the final hiring
+    decision. ``_build_header_map`` dedups by name, so we read them from the raw
+    header list here to keep both.
+    """
+    return [i for i, cell in enumerate(header) if "статус" in _norm(cell)]
+
+
+# Human-readable role per track (no explicit «должность» column in the sheet).
+_ROLE_BY_TRACK = {
+    "buh": "бухгалтер",
+    "consultant_buh": "консультант бухгалтера",
+    "jurist": "юрист",
+}
+
+
 def _looks_like_header(row: List[Any]) -> bool:
     joined = _norm(" ".join(str(c) for c in row if c))
     return "претендент" in joined or "статус" in joined
 
 
 def _row_to_candidate(
-    row: List[Any], header_map: Dict[str, int], tab: str, row_number: int
+    row: List[Any], header_map: Dict[str, int], tab: str, row_number: int,
+    status_cols: Optional[List[int]] = None,
 ) -> Optional[SheetCandidate]:
     def cell(idx: Optional[int]) -> Any:
         if idx is None or idx >= len(row):
@@ -179,7 +200,7 @@ def _row_to_candidate(
         return None
 
     resume_idx = _col(header_map, "резюме", "коммент", "контакт")
-    status_idx = _col(header_map, "статус")
+    status_cols = status_cols or []
     test_date_idx = _col(header_map, "дата отправки теста", "отправки теста")
     test_res_idx = _col(header_map, "результаты теста", "результат теста")
     link_idx = _col(header_map, "ссылка на транскриб", "транскриб", "собес")
@@ -206,15 +227,23 @@ def _row_to_candidate(
     elif link:
         source_column = "scanned_row"
 
+    track = _track_for(tab)
+    # 1st «Статус» = test/process status; 2nd «Статус» = final hiring decision.
+    sheet_status = str(cell(status_cols[0])).strip() if status_cols and cell(status_cols[0]) else None
+    decision_status = (
+        str(cell(status_cols[1])).strip() if len(status_cols) > 1 and cell(status_cols[1]) else None
+    )
+
     return SheetCandidate(
         full_name=clean_name,
-        track=_track_for(tab),
-        role=str(cell(role_idx)).strip() if cell(role_idx) else None,
+        track=track,
+        role=(str(cell(role_idx)).strip() if cell(role_idx) else None) or _ROLE_BY_TRACK.get(track),
         email=email,
         phone=phone,
         contact_raw=contact_raw if (email or phone) else (str(resume).strip() if resume else None),
         resume_comment=str(resume).strip() if resume else None,
-        sheet_status=str(cell(status_idx)).strip() if cell(status_idx) else None,
+        sheet_status=sheet_status,
+        decision_status=decision_status,
         grade_start=str(cell(grade_idx)).strip() if cell(grade_idx) else None,
         test_score=_to_float(cell(test_res_idx)),
         test_sent_at=_to_iso_date(cell(test_date_idx)),
@@ -240,11 +269,12 @@ def _parse_rows(rows: List[List[Any]], tab: str) -> List[SheetCandidate]:
             header_row = i
             break
     header_map = _build_header_map(rows[header_row])
+    status_cols = _status_columns(rows[header_row])
     out: List[SheetCandidate] = []
     for i, row in enumerate(rows[header_row + 1 :], start=header_row + 2):
         if not any(str(c).strip() for c in row if c is not None):
             continue  # blank row
-        cand = _row_to_candidate(list(row), header_map, tab, i)
+        cand = _row_to_candidate(list(row), header_map, tab, i, status_cols)
         if cand:
             out.append(cand)
     log.info("Parsed %d candidate row(s) from tab '%s'", len(out), tab)

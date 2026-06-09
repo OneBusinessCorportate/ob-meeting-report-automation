@@ -88,6 +88,7 @@ class InterviewStore:
                 "contact_raw": cand.contact_raw,
                 "resume_comment": cand.resume_comment,
                 "sheet_status": cand.sheet_status,
+                "decision_status": getattr(cand, "decision_status", None),
                 "grade_start": cand.grade_start,
                 "test_score": cand.test_score,
                 "test_sent_at": cand.test_sent_at,

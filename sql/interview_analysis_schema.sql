@@ -50,8 +50,9 @@ CREATE TABLE IF NOT EXISTS public.intv_candidates (
     phone              text,
     contact_raw        text,                          -- original contact cell
     resume_comment     text,
-    -- Free-text status straight from the sheet ("оффер отправлен", "мы отказали", …):
-    sheet_status       text,
+    -- Two free-text status columns from the sheet (both named «Статус»):
+    sheet_status       text,   -- test/process status ("тест заполнен", "тест отправлен", …)
+    decision_status    text,   -- final hiring decision ("оффер отправлен", "мы отказали", "не подходит", …)
     grade_start        text,
     test_score         numeric,
     test_sent_at       date,

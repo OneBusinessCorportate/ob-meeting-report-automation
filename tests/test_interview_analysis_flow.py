@@ -157,6 +157,21 @@ def test_sheet_parsing_extracts_link_phone_and_status():
     assert knarik.call_url is None  # no link -> will become link_missing
 
 
+def test_sheet_two_status_columns_split_into_sheet_and_decision():
+    # «Бух» has TWO columns named «Статус»: 1st=test status, 2nd=hiring decision.
+    csv_text = (
+        "Претенденты,Резюме,Статус,Дата отправки теста,Результаты теста,"
+        "Первичн. собес. (ссылка на транскриб),Статус,Грейд стартовый\n"
+        "Стелла,,тест заполнен,2026-01-16,,,оффер отправлен,Начинающий бухгалтер\n"
+        "Арпине,,не подходит,2026-01-19,,,мы отказали,\n"
+    )
+    cands = from_csv_text(csv_text, "Бух")
+    assert cands[0].sheet_status == "тест заполнен"
+    assert cands[0].decision_status == "оффер отправлен"
+    assert cands[0].role == "бухгалтер"  # track-based default
+    assert cands[1].decision_status == "мы отказали"
+
+
 def test_sheet_scans_row_for_misplaced_link():
     # Link sits in a non-designated column (mirrors the real messy sheet).
     csv_text = (
