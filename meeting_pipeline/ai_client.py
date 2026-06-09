@@ -54,6 +54,24 @@ _REQUIRED_FIELDS = ("summary", "telegram_report_md")
 _VALID_SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
 
 
+def build_provider_client(config: Config) -> Any:
+    """Create the raw provider client (Anthropic or Gemini adapter).
+
+    Both expose the same ``messages.create(...)`` contract, so callers can use
+    one code path regardless of ``AI_PROVIDER``. Shared by the meeting report
+    and the interview analysis pipelines.
+    """
+    if (config.ai_provider or "anthropic").strip().lower() == "gemini":
+        config.require_gemini()
+        from .gemini_client import GeminiClient  # imported lazily
+
+        return GeminiClient(api_key=config.gemini_api_key)
+    config.require_anthropic()
+    from anthropic import Anthropic  # imported lazily
+
+    return Anthropic(api_key=config.anthropic_api_key)
+
+
 @dataclass
 class AnalysisResult:
     ok: bool
@@ -75,16 +93,8 @@ class AIClient:
         self.provider = config.ai_provider
         if client is not None:
             self.client = client
-        elif self.provider == "gemini":
-            config.require_gemini()
-            from .gemini_client import GeminiClient  # imported lazily
-
-            self.client = GeminiClient(api_key=config.gemini_api_key)
         else:
-            config.require_anthropic()
-            from anthropic import Anthropic  # imported lazily
-
-            self.client = Anthropic(api_key=config.anthropic_api_key)
+            self.client = build_provider_client(config)
 
     def analyze(
         self,

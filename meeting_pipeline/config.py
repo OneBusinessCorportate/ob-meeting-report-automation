@@ -141,6 +141,54 @@ class Config:
         default_factory=lambda: _get("INTERVIEW_DEFAULT_ROLE", "бухгалтер")
     )
 
+    # --- Interview ANALYSIS pipeline («Обучающий центр / анализ собеседований») ---
+    # Source of the candidate/interview table. Auto-detected when unset:
+    # google_api (service account) > csv_url (published CSV) > local file.
+    interview_sheet_source: Optional[str] = field(
+        default_factory=lambda: _get("INTERVIEW_SHEET_SOURCE")
+    )
+    interview_spreadsheet_id: Optional[str] = field(
+        default_factory=lambda: _get("INTERVIEW_SPREADSHEET_ID")
+    )
+    # Comma-separated tab names to read (the «Бух» tab holds the interview links).
+    interview_sheet_tabs: str = field(
+        default_factory=lambda: _get("INTERVIEW_SHEET_TABS", "Бух")
+    )
+    interview_sheet_csv_url: Optional[str] = field(
+        default_factory=lambda: _get("INTERVIEW_SHEET_CSV_URL")
+    )
+    interview_local_xlsx: Optional[str] = field(
+        default_factory=lambda: _get("INTERVIEW_LOCAL_XLSX")
+    )
+    # Google service-account credentials (for Sheets / Docs / Drive). Either an
+    # inline JSON blob or a path to the JSON key file.
+    google_service_account_json: Optional[str] = field(
+        default_factory=lambda: _get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    )
+    google_service_account_file: Optional[str] = field(
+        default_factory=lambda: _get("GOOGLE_SERVICE_ACCOUNT_FILE")
+    )
+    # Feature toggles for the analysis pipeline outputs.
+    interview_analysis_enabled: bool = field(
+        default_factory=lambda: _get("INTERVIEW_ANALYSIS_ENABLED", "true") == "true"
+    )
+    interview_telegram_enabled: bool = field(
+        default_factory=lambda: _get("INTERVIEW_TELEGRAM_ENABLED", "false") == "true"
+    )
+    interview_sheet_writeback_enabled: bool = field(
+        default_factory=lambda: _get("INTERVIEW_SHEET_WRITEBACK_ENABLED", "false")
+        == "true"
+    )
+    # Optional dedicated chat for interview reports; falls back to the management chat.
+    interview_telegram_chat_id: Optional[str] = field(
+        default_factory=lambda: _get("INTERVIEW_TELEGRAM_CHAT_ID")
+    )
+    interview_analysis_prompt_version: str = field(
+        default_factory=lambda: _get(
+            "INTERVIEW_ANALYSIS_PROMPT_VERSION", "interview_analysis_v1"
+        )
+    )
+
     # Armenia is UTC+4 (no DST). Used for "today" boundaries and scheduling notes.
     timezone_offset_hours: int = 4
 

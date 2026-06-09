@@ -531,3 +531,227 @@ https://app.timeless.day/meetings/c1,Иван,бухгалтер,interview,c1,
 - [x] Missing-transcript cases handled clearly (`transcript_not_available` /
       `manual_action_required`).
 - [x] Offline tests (`tests/test_interview_flow.py`).
+
+---
+
+## 14. «Обучающий центр / анализ собеседований» — full interview analysis
+
+This is the complete project on top of Task II: read the candidate/interview
+table from the **Google Sheet «Обучающий центр ОВ»**, fetch the **full
+transcript** per interview, store everything in **Supabase**, and run an **AI
+analysis** of each candidate (Armenian-aware, Russian output) with a hire /
+maybe / reject / training recommendation and scores.
+
+Code lives in `interview_pipeline/` (the analysis modules) and reuses the shared
+`meeting_pipeline/` infra (config, Timeless client, AI provider, Telegram).
+
+### 14.1 Architecture
+
+```
+Google Sheet «Бух»  (candidates + interview links)
+   │  sheet_source.py  — Google Sheets API | published CSV | local .xlsx/.csv
+   ▼
+intv_candidates  +  intv_interviews        (deduped; status state machine)
+   │  transcript_resolver.py — Timeless API → Google Docs → manual file
+   ▼
+intv_transcripts  (raw_text + cleaned_text)  +  intv_transcript_segments
+   │  analyze.py — AI (Anthropic/Gemini), strict-JSON interview prompt
+   ▼
+intv_analyses  (summary, strengths, weaknesses, recommendation, …)  +  intv_scores
+   │  report.py (optional) — short Russian Telegram report per interview
+   ▼
+intv_sync_logs  (every stage logged; safe to rerun)
+```
+
+### 14.2 Database schema
+
+Defined in **`sql/interview_analysis_schema.sql`** (already applied to the
+**OB FAQ** Supabase project). Tables (namespaced `intv_` so they live safely
+beside the existing `kb_`/`mtg_`/`rag_` tables):
+
+| Table | Purpose | Key columns |
+| ----- | ------- | ----------- |
+| `intv_candidates` | one person per hiring track | `full_name`, `normalized_name`, `track`, `role`, `sheet_status`, `test_score`, dates; **UNIQUE(track, normalized_name)** |
+| `intv_interviews` | one interview/onboarding call | `candidate_id`→candidates, `source_id`→`mtg_sources`, `call_url`, `transcript_source`, `source_call_id`, `status`; **UNIQUE(source_id, source_call_id)** |
+| `intv_transcripts` | raw kept SEPARATE from cleaned | `interview_id`, `raw_text`, `cleaned_text`, `raw_payload`, counts; **UNIQUE(interview_id)** |
+| `intv_transcript_segments` | diarized lines | `transcript_id`, `interview_id`, `idx`, `speaker`, `start_ms`, `end_ms`, `text` |
+| `intv_analyses` | AI assessment, versioned | `interview_id`, `candidate_id`, `version`, `is_current`, `summary`, `candidate_strengths/weaknesses`, `red_flags`, `next_steps`, `recommendation`, `reasoning` |
+| `intv_scores` | numeric scores (0–10), 1:1 with an analysis | `analysis_id`, `communication/professional/motivation/overall_score`; CHECK 0–10 |
+| `intv_sync_logs` | per-stage run log | `run_id`, `stage`, `level`, `status`, `interview_id`, `message`, `detail` |
+
+`intv_analyses` is versioned: inserting a new `is_current` row demotes the
+previous one to `superseded` via the **BEFORE INSERT** trigger
+`intv_supersede_old_analyses`, and `uq_intv_analyses_current` guarantees one
+current analysis per interview.
+
+### 14.3 Interview status state machine
+
+`intv_interviews.status`:
+
+| Status | Meaning |
+| ------ | ------- |
+| `new` | Row created, not yet processed. |
+| `link_missing` | Candidate row has no interview/transcript link. |
+| `transcript_pending` | Fetching the full transcript. |
+| `transcript_ready` | Full transcript fetched + stored (raw + cleaned). |
+| `analysis_pending` | AI analysis in progress. |
+| `analysis_done` | Analysis + scores stored. ✅ terminal |
+| `error` | Transcript could not be fetched, or AI failed (see `error_message`). |
+
+### 14.4 Transcript source order
+
+Per the requirement *"try Timeless, if nothing use Docs"*:
+1. explicit local file (`transcript_file` column / MVP fallback);
+2. **Timeless API** (when `TIMELESS_API_TOKEN` is set);
+3. **Google Docs / Drive** link from the sheet (the transcripts we actually have
+   today are Google Docs) — via the Google API, or a public export URL;
+4. otherwise `error` with a clear message. We never substitute a summary.
+
+### 14.5 The AI analysis prompt
+
+`interview_pipeline/prompts/interview_analysis_v1.py`. Grounded, Armenian-aware,
+**always answers in Russian**, returns STRICTLY this JSON (scores 0–10):
+
+```json
+{
+  "transcript_language": "hy",
+  "summary": "...", "summary_original": "...",
+  "candidate_strengths": [], "candidate_weaknesses": [],
+  "communication_score": 0, "professional_score": 0,
+  "motivation_score": 0, "overall_score": 0,
+  "recommendation": "hire|maybe|reject|training",
+  "reasoning": "...", "red_flags": [], "next_steps": []
+}
+```
+
+The code normalises the result (scores clamped to 0–10; `recommendation` mapped
+to the four canonical values, incl. Russian synonyms) so a slightly-off model
+response still stores cleanly instead of crashing.
+
+### 14.6 Setup
+
+1. Apply the schema once (already done on OB FAQ; for a fresh project):
+   ```bash
+   psql "$SUPABASE_DB_URL" -f sql/interview_analysis_schema.sql
+   ```
+2. Choose how the sheet is read and set the env vars (section 14.8):
+   - **Google Sheets API** (most automatic): create a Google Cloud **service
+     account**, enable the Sheets + Drive APIs, download the JSON key, and
+     **share the spreadsheet (and the transcript Google Docs) with the service
+     account's email** (read access). Set `INTERVIEW_SPREADSHEET_ID` +
+     `GOOGLE_SERVICE_ACCOUNT_FILE`/`_JSON`.
+   - **Published CSV**: File → Share → Publish the «Бух» tab to web as CSV, set
+     `INTERVIEW_SHEET_CSV_URL`.
+   - **Local file**: download the sheet as `.xlsx` and pass `--xlsx`.
+3. Set the AI key (`ANTHROPIC_API_KEY` or `GEMINI_API_KEY` + `AI_PROVIDER`) and
+   `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`.
+
+### 14.7 Run commands
+
+```bash
+# Full sync from the configured Google Sheet (fetch transcript + analyze + store):
+python scripts/sync_interviews.py
+
+# From a local .xlsx export of the sheet (any tab; default «Бух»):
+python scripts/sync_interviews.py --xlsx ./data/training_center.xlsx --tab Бух
+
+# Only fetch + store transcripts, skip AI analysis:
+python scripts/sync_interviews.py --xlsx ./data/training_center.xlsx --no-analyze
+
+# Re-process finished interviews (creates a new analysis version):
+python scripts/sync_interviews.py --force
+
+# Also send a short Russian Telegram report per analyzed interview:
+python scripts/sync_interviews.py --deliver
+```
+
+The script prints a JSON summary (`processed`, `analysis_done`, `errors`,
+per-status `counts`, `run_id`). Every step is also written to `intv_sync_logs`.
+
+### 14.8 Environment variables (in addition to sections 6)
+
+| Variable | Required | Description |
+| -------- | -------- | ----------- |
+| `INTERVIEW_SPREADSHEET_ID` | for Google API | Google Sheet id. |
+| `INTERVIEW_SHEET_TABS` | no | Tabs to read (default `Бух`). |
+| `INTERVIEW_SHEET_CSV_URL` | alt. | Published-to-web CSV export URL. |
+| `INTERVIEW_LOCAL_XLSX` | alt. | Path to a local `.xlsx` export. |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` / `_FILE` | for Google API | Service-account key (blob or path). |
+| `INTERVIEW_ANALYSIS_ENABLED` | no | Run AI analysis (default `true`). |
+| `INTERVIEW_TELEGRAM_ENABLED` | no | Send Telegram report (default `false`). |
+| `INTERVIEW_TELEGRAM_CHAT_ID` | no | Dedicated chat (else management chat). |
+| `INTERVIEW_ANALYSIS_PROMPT_VERSION` | no | Default `interview_analysis_v1`. |
+
+Supabase / Timeless / AI variables are shared with the rest of the project.
+
+### 14.9 Reliability
+
+- **No duplicates** — candidates deduped by `(track, normalized_name)`,
+  interviews by `(source_id, source_call_id)`. Safe to rerun.
+- **Idempotent** — interviews already `analysis_done` are skipped unless
+  `--force`; re-analysis is versioned (`is_current`), nothing is lost.
+- **Raw ≠ processed** — `raw_text` is stored verbatim; cleaning lives in
+  `cleaned_text`, so analysis can always be re-run from the raw layer.
+- **Never crashes** — each candidate is isolated; a missing link →
+  `link_missing`, an unfetchable transcript → `error`, an AI failure → a single
+  `failed` analysis row + `error` status, all logged. One bad row never stops
+  the batch.
+
+### 14.10 How to verify
+
+```bash
+# Offline tests (no network/keys):
+python tests/test_interview_analysis_flow.py
+
+# After a real run, in Supabase (OB FAQ):
+select status, count(*) from intv_interviews group by status;
+select c.full_name, a.recommendation, s.overall_score
+  from intv_analyses a
+  join intv_candidates c on c.id = a.candidate_id
+  left join intv_scores s on s.analysis_id = a.id
+ where a.is_current order by s.overall_score desc nulls last;
+select * from intv_sync_logs order by created_at desc limit 20;
+```
+
+### 14.11 What I still need from you
+
+- **Google access** — a service-account JSON **and** the «Обучающий центр ОВ»
+  spreadsheet + the transcript Google Docs **shared** with that service
+  account's email (read). (Or a published CSV URL + publicly-viewable docs.)
+- **Timeless** — if interviews are also recorded in Timeless, a working
+  `TIMELESS_API_TOKEN`; otherwise the pipeline uses the Google-Doc links.
+- **AI key** — `ANTHROPIC_API_KEY` (or `GEMINI_API_KEY` with `AI_PROVIDER=gemini`).
+- **Supabase** — `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the OB FAQ
+  project (schema already applied there).
+
+### 14.12 Security note (RLS)
+
+The new `intv_*` tables (like the existing `interview_calls`) have **Row Level
+Security disabled**. The pipeline uses the **service-role key**, which bypasses
+RLS, so it works as-is — but the tables are exposed to the `anon`/`authenticated`
+roles. If anything client-side uses the anon key, enable RLS and add policies:
+
+```sql
+ALTER TABLE public.intv_candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.intv_interviews ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.intv_transcripts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.intv_transcript_segments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.intv_analyses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.intv_scores ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.intv_sync_logs ENABLE ROW LEVEL SECURITY;
+-- then add policies appropriate to your access model (none = service-role only).
+```
+
+### DoD (analysis pipeline)
+
+- [x] Google Sheet analyzed; columns/structure documented; messy layout handled.
+- [x] Supabase schema (7 tables) designed, applied to OB FAQ, and verified
+      (supersede trigger, score CHECK, FK cascade).
+- [x] Status state machine (`new`…`analysis_done`/`error`).
+- [x] Transcript source order Timeless → Google Docs → manual file; raw stored
+      separately from cleaned.
+- [x] Armenian-aware AI analysis returning strict JSON (Russian output) + scores
+      + hire/maybe/reject/training recommendation with reasoning.
+- [x] Idempotent, rerunnable, never crashes on missing link/empty transcript;
+      every stage logged to `intv_sync_logs`.
+- [x] Offline tests (`tests/test_interview_analysis_flow.py`, 17 cases).

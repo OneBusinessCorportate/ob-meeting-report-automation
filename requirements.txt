@@ -7,3 +7,12 @@ python-dotenv>=1.0.0
 # AI provider SDKs. anthropic (above) is the default; google-genai is only
 # imported when AI_PROVIDER=gemini.
 google-genai>=1.0.0
+
+# Interview-analysis sheet/transcript sources (all lazily imported — only needed
+# when actually used):
+#   openpyxl    — read a local .xlsx export of the «Обучающий центр ОВ» sheet
+#   gspread + google-auth — read the Google Sheet / export Google-Doc transcripts
+#                           via a service account (Sheets/Docs/Drive read-only)
+openpyxl>=3.1.0
+gspread>=6.0.0
+google-auth>=2.27.0
