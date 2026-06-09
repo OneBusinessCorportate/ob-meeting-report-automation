@@ -314,17 +314,23 @@ the steps. One combined job is fine for the MVP.
   python scripts/debug_timeless_api.py --start-date 2026-05-26 --end-date 2026-06-09
   ```
 
-  Then act on the `diagnosis`:
-  - **A date param variant returned meetings** → the API ignores
-    `start_date`/`end_date`. Set `TIMELESS_START_PARAM` / `TIMELESS_END_PARAM`
-    (e.g. `from` / `to`) to the winning pair in Render. No code change needed.
-  - **"NO status filter" returned meetings** → the meetings aren't tagged
-    `completed`. Set `TIMELESS_STATUS_FILTER=` (empty) to drop the filter, or set
-    it to the correct value.
-  - **AUTH BLOCKER / a different scheme worked** → set `TIMELESS_AUTH_SCHEME`
+  The report ends with a `result_code` + `diagnosis`. Act on the code:
+  - `no_meetings_in_range` → **not a bug.** `start_date`/`end_date` are honoured
+    and there are simply no meetings in the requested dates (the API ignores every
+    *other* param name, so any variant that returns the same count as "no params"
+    is being ignored, not filtering). Re-run ingest with the dates that actually
+    have meetings. *(This is the real cause of the OneBusiness 0-meeting reports:
+    the only meetings in the workspace are from March 2026, so a May/June or
+    "today" range correctly returns 0.)*
+  - `wrong_param` → a date param name **other** than `start_date`/`end_date`
+    returned a real filtered subset. Set `TIMELESS_START_PARAM` /
+    `TIMELESS_END_PARAM` to that pair in Render. No code change needed.
+  - `status_filter` → the same date range returns meetings only without the
+    status filter. Set `TIMELESS_STATUS_FILTER=` (empty) or the correct value.
+  - `auth_wrong_scheme` / `auth_blocker` → set `TIMELESS_AUTH_SCHEME`
     (`bearer` | `x-api-key` | `token`) to the accepted scheme, or re-issue the
     token if all schemes 401/403.
-  - **Every variant returned 200 + 0 meetings** → the documented blocker:
+  - `empty_workspace` → the documented blocker:
     `Timeless API does not expose meetings for this token/workspace/date range`.
     Confirm the meetings belong to **this token's workspace**, that the token has
     API access to them, and that the date range matches the meeting dates

@@ -98,11 +98,20 @@ def main() -> int:
     report = client.diagnose_listing(start_date, end_date)
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
 
+    code = report.get("result_code")
     diagnosis = report.get("diagnosis") or ""
-    if "MEETINGS FOUND" in diagnosis:
+    # Codes that represent a clear, non-blocking answer (working, or an actionable
+    # env fix). Everything else is a real blocker surfaced loudly for Render logs.
+    ok_codes = {
+        "ok_in_range",
+        "no_meetings_in_range",
+        "wrong_param",
+        "status_filter",
+        "auth_wrong_scheme",
+    }
+    if code in ok_codes:
         log.info(diagnosis)
         return 0
-    # Surface the blocker line loudly so it's obvious in Render logs.
     log.warning(diagnosis)
     return 1
 

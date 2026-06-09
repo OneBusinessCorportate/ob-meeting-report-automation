@@ -324,8 +324,9 @@ def test_diagnose_never_exposes_token():
     assert report["token_length"] == len("secret-token")
 
 
-def test_diagnose_reports_winning_variant():
-    # Baseline (start_date/end_date) returns 0; the from/to variant returns 1.
+def test_diagnose_reports_wrong_param_names():
+    # start_date/end_date (and no-params) return 0; only from/to actually filters
+    # to a real subset (1) -> the configured param NAMES are wrong.
     def resp_for(call):
         params = call.get("params") or {}
         if "from" in params:
@@ -343,14 +344,64 @@ def test_diagnose_reports_winning_variant():
 
     client = TimelessClient(_config(), session=RoutingSession(), sleep=lambda *_: None)
     report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
-    assert "MEETINGS FOUND" in report["diagnosis"]
+    assert report["result_code"] == "wrong_param"
     assert "from" in report["diagnosis"]
+
+
+def test_diagnose_ignored_params_are_not_treated_as_winners():
+    # The real Render situation: start_date/end_date filter to 0 (range empty),
+    # but EVERY other param name is ignored and echoes the unfiltered total (5).
+    # That must NOT be reported as a working param — the params are simply empty.
+    def resp_for(call):
+        params = call.get("params") or {}
+        # The configured names actually filter (range empty -> 0).
+        if "start_date" in params or "end_date" in params:
+            return FakeResp(200, {"data": []})
+        # Everything else (incl. no-params) is ignored -> full list of 5.
+        return FakeResp(200, {"data": [{"id": str(i)} for i in range(5)]})
+
+    class RoutingSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None, timeout=None):
+            self.calls.append({"url": url, "headers": headers, "params": params})
+            return resp_for(self.calls[-1])
+
+    client = TimelessClient(_config(), session=RoutingSession(), sleep=lambda *_: None)
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert report["result_code"] == "no_meetings_in_range"
+    assert "5 meeting(s)" in report["diagnosis"]
+    assert "working correctly" in report["diagnosis"]
 
 
 def test_diagnose_all_zero_emits_clear_blocker():
     client, _ = _client([FakeResp(200, {"meetings": []})] * 30)
     report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert report["result_code"] == "empty_workspace"
     assert "does not expose meetings for this token/workspace/date range" in report["diagnosis"]
+
+
+def test_diagnose_status_filter_culprit():
+    # With status filter -> 0; same dates without status -> meetings. -> status fix.
+    def resp_for(params):
+        if params.get("status"):
+            return FakeResp(200, {"data": []})
+        if params.get("start_date"):  # configured dates, no status
+            return FakeResp(200, {"data": [{"id": "1"}, {"id": "2"}]})
+        return FakeResp(200, {"data": [{"id": "1"}, {"id": "2"}]})
+
+    class RoutingSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None, timeout=None):
+            self.calls.append({"url": url, "headers": headers, "params": params})
+            return resp_for(params or {})
+
+    client = TimelessClient(_config(), session=RoutingSession(), sleep=lambda *_: None)
+    report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
+    assert report["result_code"] == "status_filter"
 
 
 def test_diagnose_auth_failure_probes_schemes():
@@ -358,6 +409,7 @@ def test_diagnose_auth_failure_probes_schemes():
     client, _ = _client([FakeResp(401)] * 10)
     report = client.diagnose_listing(date(2026, 5, 26), date(2026, 6, 9))
     assert report["auth_scheme_probes"]
+    assert report["result_code"] == "auth_blocker"
     assert "AUTH BLOCKER" in report["diagnosis"]
 
 

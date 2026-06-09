@@ -397,9 +397,11 @@ class TimelessClient:
             "date_range": f"{start_date.isoformat()}..{end_date.isoformat()}",
             "variants": [],
             "auth_scheme_probes": [],
+            "result_code": None,
             "diagnosis": None,
         }
         if not self.is_configured:
+            report["result_code"] = "not_configured"
             report["diagnosis"] = (
                 "Not configured: set TIMELESS_API_TOKEN (and TIMELESS_API_BASE_URL "
                 "if not using the default)."
@@ -422,7 +424,9 @@ class TimelessClient:
         # If auth is failing, the param matrix is pointless — probe schemes instead.
         if baseline.get("status") in (401, 403):
             report["auth_scheme_probes"] = self._probe_auth_schemes(baseline_params)
-            report["diagnosis"] = self._auth_diagnosis(report["auth_scheme_probes"])
+            report["result_code"], report["diagnosis"] = self._auth_diagnosis(
+                report["auth_scheme_probes"]
+            )
             return report
 
         # 2) Same date params but WITHOUT the status filter.
@@ -449,7 +453,9 @@ class TimelessClient:
                 )
             )
 
-        report["diagnosis"] = self._listing_diagnosis(report["variants"])
+        report["result_code"], report["diagnosis"] = self._listing_diagnosis(
+            report["variants"]
+        )
         return report
 
     def _probe_variant(self, label: str, params: dict) -> Dict[str, Any]:
@@ -530,54 +536,104 @@ class TimelessClient:
         return text[:300]
 
     @staticmethod
-    def _auth_diagnosis(probes: List[Dict[str, Any]]) -> str:
+    def _auth_diagnosis(probes: List[Dict[str, Any]]):
+        """Return (result_code, message) for the auth-failure path."""
         working = [p["auth_scheme"] for p in probes if p.get("status") not in (None, 401, 403)]
         if working:
-            return (
+            return "auth_wrong_scheme", (
                 "AUTH: the configured auth scheme was rejected (401/403), but "
                 f"scheme(s) {working} were accepted. Set TIMELESS_AUTH_SCHEME to "
                 f"'{working[0]}'."
             )
-        return (
+        return "auth_blocker", (
             "AUTH BLOCKER: every auth scheme (bearer / x-api-key / token) returned "
             "401/403. The TIMELESS_API_TOKEN is likely invalid, expired, or lacks "
             "API access for this workspace. Re-issue the token in Timeless."
         )
 
-    @staticmethod
-    def _listing_diagnosis(variants: List[Dict[str, Any]]) -> str:
-        # Any variant that actually returned meetings?
-        winners = [
-            v for v in variants
-            if isinstance(v.get("count"), int) and v["count"] > 0
-        ]
-        if winners:
-            best = max(winners, key=lambda v: v["count"])
-            return (
-                f"MEETINGS FOUND via variant '{best['label']}' "
-                f"({best['count']} meeting(s), list key: {best.get('list_key')}). "
-                f"Set the Timeless env params to match this variant — params used: "
-                f"{best['params']}. If this differs from the 'configured' variant, "
-                f"the ingest call was using the wrong param names/status."
-            )
-        # Did anything 200 at all?
+    @classmethod
+    def _listing_diagnosis(cls, variants: List[Dict[str, Any]]):
+        """Return (result_code, message) explaining the listing result.
+
+        The crucial subtlety: this API silently ignores *unknown* query params,
+        so an alternative date-param name that returns the SAME count as the
+        no-params listing is being ignored — it is NOT a working filter. A param
+        is only "honoured" when it changes the count versus the unfiltered list.
+        """
         any_200 = [v for v in variants if v.get("status") == 200]
         if not any_200:
-            statuses = sorted({v.get("status") for v in variants})
-            return (
+            statuses = sorted(
+                {v.get("status") for v in variants}, key=lambda x: (x is None, x)
+            )
+            return "unreachable", (
                 f"No variant returned HTTP 200 (statuses seen: {statuses}). The "
                 "endpoint/auth is wrong or the API is unreachable."
             )
-        # Everything 200 but 0 meetings under every shape.
-        return (
-            "Timeless API does not expose meetings for this token/workspace/date "
-            "range. Every request returned HTTP 200 but 0 meetings across all date "
-            "param names and with/without the status filter. Verify in the Timeless "
-            "UI that these meetings belong to THIS token's workspace, that the API "
-            "token has access to them, and that the date range matches the meeting "
-            "dates (timezone). They may also be exposed under a different resource "
-            "than the meetings listing (e.g. only via a share link / transcript "
-            "endpoint)."
+
+        def _find(pred):
+            return next((v for v in variants if pred(v)), None)
+
+        configured = _find(lambda v: v["label"].startswith("configured (used by ingest)"))
+        no_params = _find(lambda v: not v.get("params"))
+        no_status = _find(lambda v: "NO status filter" in v["label"])
+        all_count = no_params.get("count") if no_params else None  # unfiltered total
+        configured_count = configured.get("count") if configured else None
+
+        # 1) The ingest range already returns meetings — nothing to fix.
+        if isinstance(configured_count, int) and configured_count > 0:
+            return "ok_in_range", (
+                f"OK: the configured params returned {configured_count} meeting(s) "
+                "for this range. The Timeless integration is working."
+            )
+
+        # 2) The status filter is hiding meetings: with the SAME date params,
+        #    dropping the status filter turns 0 into >0.
+        if (
+            no_status
+            and isinstance(no_status.get("count"), int)
+            and no_status["count"] > 0
+        ):
+            return "status_filter", (
+                "STATUS FILTER is hiding meetings: the configured date range returns "
+                f"{no_status['count']} meeting(s) without the status filter but 0 with "
+                "status=completed. Set TIMELESS_STATUS_FILTER= (empty) in Render, or to "
+                "the value the API actually uses."
+            )
+
+        # 3) A DIFFERENT date param name actually filters (count differs from the
+        #    unfiltered total) and returns meetings while the configured one is 0
+        #    -> the configured param names are wrong.
+        for v in variants:
+            if v is configured or v is no_params or v is no_status:
+                continue
+            c = v.get("count")
+            if isinstance(c, int) and c > 0 and c != all_count:
+                return "wrong_param", (
+                    f"WRONG DATE PARAM NAMES: variant '{v['label']}' returned {c} "
+                    "meeting(s) — a real filtered subset — while the configured "
+                    "start_date/end_date returned 0. Set TIMELESS_START_PARAM / "
+                    f"TIMELESS_END_PARAM to match these params: {v['params']}."
+                )
+
+        # 4) Nothing anywhere, even with no filter -> the documented hard blocker.
+        if not all_count:  # 0 or None
+            return "empty_workspace", (
+                "Timeless API does not expose meetings for this token/workspace/date "
+                "range. Even with NO date filter the listing returned 0 meetings. "
+                "Confirm the TIMELESS_API_TOKEN belongs to the workspace that holds "
+                "the meetings and has API access to them."
+            )
+
+        # 5) There ARE meetings overall, the configured date params ARE honoured
+        #    (0 differs from the unfiltered total, and every other param name just
+        #    echoes the unfiltered total = ignored), so the range is simply empty.
+        return "no_meetings_in_range", (
+            f"NO MEETINGS IN THIS DATE RANGE. The workspace has {all_count} meeting(s) "
+            "in total, but none in the requested range. The configured "
+            "start_date/end_date params are working correctly (every other param name "
+            f"is ignored by the API and just echoes the full {all_count}). This is NOT "
+            "an integration bug — re-run ingest with the date range that actually "
+            "contains meetings (see the dates in the Timeless UI)."
         )
 
     def probe(
