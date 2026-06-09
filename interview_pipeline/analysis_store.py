@@ -415,3 +415,53 @@ class InterviewStore:
     @staticmethod
     def new_run_id() -> str:
         return str(uuid.uuid4())
+
+    # --- schedule markers (for the time-based 15/30-day cadence) --------------
+    def last_schedule_run(self, kind: str) -> Optional[datetime]:
+        """When a ``full``/``mini`` scheduled sync last completed (or None)."""
+        rows = (
+            self.client.table(SYNC_LOGS)
+            .select("created_at")
+            .eq("stage", "schedule")
+            .eq("status", f"{kind}_done")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data
+        if not rows:
+            return None
+        return _parse_ts(rows[0].get("created_at"))
+
+    def log_schedule(self, kind: str, *, message: Optional[str] = None,
+                     detail: Optional[dict] = None) -> None:
+        """Record that a scheduled ``kind`` sync completed (marks the timer)."""
+        self.client.table(SYNC_LOGS).insert(
+            _drop_none({
+                "run_id": self.new_run_id(),
+                "stage": "schedule",
+                "level": "info",
+                "status": f"{kind}_done",
+                "message": message,
+                "detail": detail,
+            })
+        ).execute()
+
+
+def _parse_ts(value: Any) -> Optional[datetime]:
+    """Parse a Supabase timestamptz string into an aware UTC datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        # Trim fractional seconds with >6 digits / trailing data, then retry.
+        try:
+            dt = datetime.fromisoformat(text[:26] + text[-6:]) if "+" in text else None
+        except ValueError:
+            return None
+        if dt is None:
+            return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)

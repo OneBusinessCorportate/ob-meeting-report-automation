@@ -336,6 +336,51 @@ def test_pipeline_handles_unfetchable_link_as_error():
     assert result["processed"] == 1  # did not crash
 
 
+# --- scheduler (15/30-day cadence) --------------------------------------------
+def test_decide_kind_cadence():
+    from datetime import datetime, timedelta, timezone
+    from interview_pipeline.schedule import decide_kind
+
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # Never run before -> full.
+    assert decide_kind(None, None, now) == "full"
+    # Full 31 days ago -> full again.
+    assert decide_kind(now - timedelta(days=31), now - timedelta(days=10), now) == "full"
+    # Full 20 days ago, mini 16 days ago -> mini due (15) but not full (30).
+    assert decide_kind(now - timedelta(days=20), now - timedelta(days=16), now) == "mini"
+    # Full 10 days ago, mini 5 days ago -> nothing due.
+    assert decide_kind(now - timedelta(days=10), now - timedelta(days=5), now) is None
+
+
+def test_run_scheduled_not_due_when_recent():
+    from datetime import datetime, timezone
+    from interview_pipeline.analysis_store import SYNC_LOGS
+    from interview_pipeline.schedule import run_scheduled
+
+    store = _store()
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # Seed recent full + mini markers (created just now).
+    for kind in ("full", "mini"):
+        store.client.table(SYNC_LOGS).insert(
+            {"stage": "schedule", "status": f"{kind}_done", "created_at": now.isoformat()}
+        ).execute()
+    result = run_scheduled(_config(), store=store, now=now)
+    assert result["ran"] is False and result["reason"] == "not_due"
+
+
+def test_run_scheduled_mini_no_source_processes_zero_and_no_marker():
+    from interview_pipeline.analysis_store import SYNC_LOGS
+    from interview_pipeline.schedule import run_scheduled
+
+    store = _store()
+    # force mini; no sheet source configured -> 0 processed, timer NOT marked.
+    result = run_scheduled(_config(), store=store, force_kind="mini")
+    assert result["ran"] is True and result["kind"] == "mini"
+    assert result["processed"] == 0
+    markers = store.client.table(SYNC_LOGS).select("*").eq("stage", "schedule").execute().data
+    assert markers == []  # nothing processed -> retries next day
+
+
 # --- manual runner ------------------------------------------------------------
 def _run_all():
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_") and callable(o)]

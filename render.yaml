@@ -13,7 +13,13 @@ services:
     runtime: python
     schedule: "0 7 * * 1-5"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python scripts/run_daily_meeting_report.py"
+    # One service does both jobs (no extra Render service needed):
+    #  1) the daily morning meeting report, and
+    #  2) an interview-sync schedule check that runs a FULL sync ~every 30 days
+    #     and a MINI sync (transcripts only) ~every 15 days. The cadence is
+    #     time-based (tracked in intv_sync_logs), so it triggers on the first
+    #     daily run on/after each threshold — independent of exact calendar days.
+    startCommand: "python scripts/run_daily.py"
     envVars:
       - key: SUPABASE_URL
         sync: false
@@ -44,77 +50,23 @@ services:
         value: hy
       - key: MEETING_DELIVERY_TIME
         value: "11:00"
-
-  # ---------------------------------------------------------------------------
-  # «Обучающий центр / анализ собеседований» — scheduled interview sync.
-  #
-  # Cadence (Render cron is UTC; Armenia = UTC+4, so 06:00 UTC = 10:00 Armenia):
-  #   * FULL  update ~every 30 days — 1st of each month  ("0 6 1 * *").
-  #       Reads the sheet, fetches transcripts, runs the AI analysis, stores
-  #       everything (candidates + interviews + transcripts + analysis + scores).
-  #   * MINI  update ~every 15 days — 16th of each month ("0 6 16 * *").
-  #       Refreshes candidates and fetches any NEW transcripts only
-  #       (--no-analyze: no AI cost). Together they give a refresh ~every 15 days
-  #       and a full analyzed pass ~every 30 days.
-  #
-  # The job is idempotent: existing candidates/interviews are deduped and
-  # already-finished interviews are skipped (use --force to re-process).
-  # Set the secrets (sync: false) in the Render dashboard for each service, or
-  # attach all services to a shared env group.
-  # ---------------------------------------------------------------------------
-  - type: cron
-    name: ob-interview-sync-full
-    runtime: python
-    schedule: "0 6 1 * *"            # 1st of month, 10:00 Armenia (~every 30 days)
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python scripts/sync_interviews.py"
-    envVars:
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: AI_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY        # only used if AI_PROVIDER=anthropic
-        sync: false
-      - key: TIMELESS_API_TOKEN       # optional; Google Docs fallback works without it
-        sync: false
-      - key: TIMELESS_API_BASE_URL
-        value: https://api.timeless.day/v1
+      # --- Interview sync (same service; see scripts/run_daily.py) ---
+      # Cadence overrides (days); defaults: full=30, mini=15.
+      - key: INTERVIEW_FULL_INTERVAL_DAYS
+        value: "30"
+      - key: INTERVIEW_MINI_INTERVAL_DAYS
+        value: "15"
+      # Source of the candidate/interview table (set the secret in the dashboard):
       - key: INTERVIEW_SPREADSHEET_ID
         sync: false
       - key: INTERVIEW_SHEET_TABS
         value: "Бух"
-      - key: GOOGLE_SERVICE_ACCOUNT_JSON   # share the sheet + docs with this account
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON   # share the sheet + transcript docs with this account
         sync: false
       - key: INTERVIEW_ANALYSIS_ENABLED
         value: "true"
       - key: INTERVIEW_TELEGRAM_ENABLED
         value: "false"
-
-  - type: cron
-    name: ob-interview-sync-mini
-    runtime: python
-    schedule: "0 6 16 * *"           # 16th of month, 10:00 Armenia (~every 15 days)
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python scripts/sync_interviews.py --no-analyze"
-    envVars:
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: TIMELESS_API_TOKEN
-        sync: false
-      - key: TIMELESS_API_BASE_URL
-        value: https://api.timeless.day/v1
-      - key: INTERVIEW_SPREADSHEET_ID
-        sync: false
-      - key: INTERVIEW_SHEET_TABS
-        value: "Бух"
-      - key: GOOGLE_SERVICE_ACCOUNT_JSON
-        sync: false
 
 # --- Alternative: three separate cron jobs (uncomment to use instead) --------
 #   - type: cron
