@@ -34,16 +34,45 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from interview_pipeline.pipeline import sync_interviews  # noqa: E402
+from interview_pipeline.sheet_source import SheetCandidate  # noqa: E402
 from meeting_pipeline.config import load_config  # noqa: E402
 from meeting_pipeline.utils import get_logger  # noqa: E402
 
 log = get_logger("scripts.sync_interviews")
 
 
+def _parse_links(items):
+    """Parse repeatable --link "Имя|URL" (or just URL) into SheetCandidate rows."""
+    out = []
+    for i, raw in enumerate(items or [], start=1):
+        if "|" in raw:
+            name, url = raw.split("|", 1)
+        else:
+            name, url = f"Кандидат {i}", raw
+        url = url.strip()
+        if not url:
+            continue
+        out.append(
+            SheetCandidate(
+                full_name=name.strip() or f"Кандидат {i}",
+                track="buh",
+                role="бухгалтер",
+                call_url=url,
+                source_sheet="manual",
+                source_row=i,
+            )
+        )
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync + analyze training-center interviews.")
     parser.add_argument("--xlsx", help="Local .xlsx export of the «Обучающий центр ОВ» sheet.")
     parser.add_argument("--csv", help="Local .csv export of a single sheet tab.")
+    parser.add_argument(
+        "--link", action="append", dest="links",
+        help='Add a link directly, format "Имя|URL" (repeatable). No sheet/creds needed.',
+    )
     parser.add_argument(
         "--tab", action="append", dest="tabs",
         help="Sheet tab(s) to read (repeatable; default «Бух»).",
@@ -55,11 +84,13 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config()
+    manual = _parse_links(args.links) if args.links else None
     result = sync_interviews(
         config,
         xlsx_path=args.xlsx,
         csv_path=args.csv,
         tabs=args.tabs,
+        candidates=manual,
         do_analyze=False if args.no_analyze else None,
         do_deliver=True if args.deliver else None,
         force=args.force,

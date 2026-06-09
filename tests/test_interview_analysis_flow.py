@@ -336,6 +336,32 @@ def test_pipeline_handles_unfetchable_link_as_error():
     assert result["processed"] == 1  # did not crash
 
 
+# --- manual links (no sheet / no creds) ---------------------------------------
+def test_parse_links_cli():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "sync_cli", str(Path(__file__).resolve().parents[1] / "scripts" / "sync_interviews.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    rows = mod._parse_links(["Роберт|https://docs.google.com/document/d/D1/edit", "https://x/y"])
+    assert rows[0].full_name == "Роберт" and "D1" in rows[0].call_url
+    assert rows[1].full_name == "Кандидат 2"
+
+
+def test_sync_with_manual_candidates_bypasses_sheet():
+    config = _config()
+    store = _store()
+    resolver = TranscriptResolver(config)
+    analyzer = InterviewAnalyzer(config, client=FakeAI(_GOOD_ANALYSIS))
+    d = tempfile.mkdtemp()
+    tfile = Path(d) / "t.txt"
+    tfile.write_text("Полный транскрипт.", encoding="utf-8")
+    cand = SheetCandidate(full_name="Тест Линк", track="buh", call_url="x", transcript_file=str(tfile))
+    res = sync_interviews(config, candidates=[cand], store=store, resolver=resolver, analyzer=analyzer)
+    assert res["processed"] == 1 and res["counts"].get(STATUS_ANALYSIS_DONE) == 1
+
+
 # --- scheduler (15/30-day cadence) --------------------------------------------
 def test_decide_kind_cadence():
     from datetime import datetime, timedelta, timezone

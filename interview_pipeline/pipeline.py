@@ -275,6 +275,7 @@ def sync_interviews(
     xlsx_path: Optional[str] = None,
     csv_path: Optional[str] = None,
     tabs: Optional[List[str]] = None,
+    candidates: Optional[List[SheetCandidate]] = None,
     do_analyze: Optional[bool] = None,
     do_deliver: Optional[bool] = None,
     force: bool = False,
@@ -283,7 +284,12 @@ def sync_interviews(
     resolver: Optional[TranscriptResolver] = None,
     analyzer: Optional[InterviewAnalyzer] = None,
 ) -> Dict[str, Any]:
-    """Run the full sync. Returns a structured summary."""
+    """Run the full sync. Returns a structured summary.
+
+    ``candidates`` lets callers supply rows directly (e.g. links added on the
+    CLI) and bypass reading the Google Sheet — useful when the sheet API isn't
+    configured.
+    """
     store = store or InterviewStore(config)
     resolver = resolver or TranscriptResolver(config)
     do_analyze = config.interview_analysis_enabled if do_analyze is None else do_analyze
@@ -292,7 +298,8 @@ def sync_interviews(
         analyzer = InterviewAnalyzer(config)
 
     run_id = store.new_run_id()
-    candidates = load_candidates(config, xlsx_path=xlsx_path, csv_path=csv_path, tabs=tabs)
+    if candidates is None:
+        candidates = load_candidates(config, xlsx_path=xlsx_path, csv_path=csv_path, tabs=tabs)
     if limit:
         candidates = candidates[:limit]
     store.log_event(
