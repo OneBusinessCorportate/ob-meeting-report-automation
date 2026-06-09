@@ -26,6 +26,7 @@ data/transcripts/*
 data/interviews/*
 !data/interviews/.gitkeep
 !data/interviews/sample_links.csv
+!data/interviews/sample_buh.csv
 !data/interviews/sample_transcript_candidate1.txt
 
 # Real training-center links export (keep only the example template)
