@@ -80,24 +80,36 @@ The existing `mtg_*` tables are reused (no parallel system is created):
 
 Per the management requirements, each report (and the Telegram message) covers:
 
-- **summary** — short recap.
+- **summary** — short recap (1-2 sentences, no "Кратко" label).
+- **participant_breakdown** — every accountant by name: what was done yesterday,
+  today's plan, which cases, blockers and where help is needed. Anyone on the
+  roster (`MEETING_TEAM_ROSTER`) who said nothing is flagged
+  `participated: false` ("не принимал(а) участия").
+- **manager_reactions** — Эмилия's reactions to each accountant
+  (рекомендация / критика / задача), plus `followup_on_previous_tasks` (did she
+  ask for results on tasks set earlier?) and `who_took_ownership`.
+- **talk_share** — rough talk-time split (manager % vs accountants %).
 - **topics** — discussed topics with key points and rough time share.
 - **decisions** — a decision log (only explicitly stated decisions).
-- **action_items** — task, assignee, deadline, priority (`Не указано` when not stated).
+- **action_items** — task, assignee, deadline, priority, and `how_to_track`.
+- **problems_risks** — situations described in context, with severity, owner,
+  deadline and how to track progress.
 - **open_questions** — unresolved questions.
 - **people_mentioned** — who spoke / who was mentioned, with context.
 - **praised / criticized** — who was praised and who was criticized, and why.
-- **problems_risks** — problems and risks with severity.
 - **sentiment** + **meeting_mood** — overall tone, energy, engagement, dominant/silent speakers.
 - **late_start / late_start_minutes** — whether the meeting started late, and by how much.
-- **mgmt_recommendations** — a **separate manager briefing for Эмилия**:
-  `focus_points`, `recurring_issues`, `risks`, `who_to_support`,
-  `needs_intervention`.
-- **telegram_report_md** — the final markdown message.
+- **mgmt_recommendations** — an internal manager briefing (stored, but **not**
+  rendered into the Telegram message per leadership feedback).
+- **telegram_report_md** — the final message, written as clean plain text
+  (emoji headers, `•` bullets, **no** markdown `*`/`_`/`[]` characters) so it
+  reads cleanly in Telegram without stray asterisks.
 
-`decisions`, `praised` and `criticized` have no dedicated column, so they are
-preserved inside `mtg_analyses.ai_metadata.report_extras` (and surfaced in the
-Telegram report). Nothing is lost.
+`decisions`, `praised`, `criticized`, `participant_breakdown`,
+`manager_reactions`, `followup_on_previous_tasks`, `who_took_ownership` and
+`talk_share` have no dedicated column, so they are preserved inside
+`mtg_analyses.ai_metadata.report_extras` (and surfaced in the Telegram report).
+Nothing is lost.
 
 ## 4. Why the FULL transcript is required
 
@@ -153,7 +165,8 @@ Copy `.env.example` to `.env` and fill in:
 | `ANTHROPIC_API_KEY`            | yes\*\*  | Anthropic API key. Required when `AI_PROVIDER=anthropic`.|
 | `GEMINI_API_KEY`               | yes\*\*  | Google Gemini API key. Required when `AI_PROVIDER=gemini`.|
 | `AI_MODEL_ID`                  | no       | Per-provider default: `claude-sonnet-4-20250514` / `gemini-2.5-pro`. |
-| `AI_PROMPT_VERSION`            | no       | Defaults to `full_transcript_prompt_v1`.                 |
+| `AI_PROMPT_VERSION`            | no       | Defaults to `full_transcript_prompt_v2`.                 |
+| `MEETING_TEAM_ROSTER`          | no       | Known accountants (`Имя:роль`, comma-separated) so the report covers everyone and flags non-participants. |
 | `TELEGRAM_BOT_TOKEN`           | yes      | Telegram bot token.                                      |
 | `TELEGRAM_MANAGEMENT_CHAT_ID`  | yes      | Target chat id for the report.                           |
 | `MEETING_DEFAULT_SOURCE`       | no       | Defaults to `timeless`.                                  |

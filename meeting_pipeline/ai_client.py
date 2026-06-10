@@ -46,6 +46,11 @@ _EXTRA_FIELDS = (
     "decisions",
     "praised",
     "criticized",
+    "participant_breakdown",
+    "manager_reactions",
+    "followup_on_previous_tasks",
+    "who_took_ownership",
+    "talk_share",
 )
 
 # The report is only considered usable if at least these core fields are present.
@@ -105,6 +110,7 @@ class AIClient:
         language: Optional[str] = None,
         time_range: Optional[str] = None,
         participants: Optional[List[str]] = None,
+        team_roster: Optional[List[Any]] = None,
         max_tokens: int = 8192,
     ) -> AnalysisResult:
         """Generate a structured L2 report from the FULL transcript."""
@@ -123,6 +129,7 @@ class AIClient:
             language=language,
             time_range=time_range,
             participants=participants,
+            team_roster=team_roster,
         )
 
         start = time.monotonic()

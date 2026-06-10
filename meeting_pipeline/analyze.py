@@ -104,6 +104,7 @@ def _analyze_meeting_inner(
         meeting_date=meeting_date,
         language=meeting.get("transcript_language"),
         participants=_participants_from_meeting(meeting),
+        team_roster=getattr(ai.config, "meeting_team_roster", []),
     )
 
     if not result.ok:

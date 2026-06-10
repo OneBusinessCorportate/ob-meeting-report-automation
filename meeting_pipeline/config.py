@@ -100,7 +100,7 @@ class Config:
     # Left as None when AI_MODEL_ID is unset; resolved per-provider in __post_init__.
     ai_model_id: Optional[str] = field(default_factory=lambda: _get("AI_MODEL_ID"))
     ai_prompt_version: str = field(
-        default_factory=lambda: _get("AI_PROMPT_VERSION", "full_transcript_prompt_v1")
+        default_factory=lambda: _get("AI_PROMPT_VERSION", "full_transcript_prompt_v2")
     )
 
     # --- Telegram ---
@@ -126,6 +126,13 @@ class Config:
     # without any manual command. 0 = today only.
     analyze_lookback_days: int = field(
         default_factory=lambda: int(_get("MEETING_ANALYZE_LOOKBACK_DAYS", "0"))
+    )
+    # Known accounting-team roster, so the report can go through EVERY accountant
+    # by name and flag those who said nothing as "не принимал(а) участия".
+    # Format: comma-separated "Имя:роль" (role optional), e.g.
+    #   MEETING_TEAM_ROSTER="Эмилия:руководитель,Анна:бухгалтер,Давид:бухгалтер"
+    meeting_team_roster_raw: Optional[str] = field(
+        default_factory=lambda: _get("MEETING_TEAM_ROSTER")
     )
 
     # --- Interview / onboarding transcription (task II) ---
@@ -199,6 +206,27 @@ class Config:
             self.ai_model_id = _DEFAULT_MODELS.get(
                 self.ai_provider, _DEFAULT_MODELS["anthropic"]
             )
+
+    @property
+    def meeting_team_roster(self) -> list:
+        """Parse ``MEETING_TEAM_ROSTER`` into ``[{"name":.., "role":..}]``.
+
+        Accepts ``"Имя:роль"`` entries separated by commas (or newlines); the
+        role part is optional. Returns ``[]`` when unset.
+        """
+        raw = self.meeting_team_roster_raw
+        if not raw:
+            return []
+        roster = []
+        for chunk in raw.replace("\n", ",").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            name, _, role = chunk.partition(":")
+            name = name.strip()
+            if name:
+                roster.append({"name": name, "role": role.strip()})
+        return roster
 
     # --- Validation helpers ---------------------------------------------------
     @property
