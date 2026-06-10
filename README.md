@@ -109,7 +109,8 @@ Per the management requirements, each report (and the Telegram message) covers:
 - **mgmt_recommendations** — recommendations addressed to **Эмилия** (not the
   team) on how to run meetings more effectively, derived from where the
   effectiveness checklist fell short (`what_went_well`, `what_to_improve`,
-  `recommendations`). This block **is** rendered into the Telegram report.
+  `recommendations`). Stored for now, but **not** rendered into the Telegram
+  report (relevance still being worked out with Lilit).
 - **telegram_report_md** — the final message, written as clean plain text
   (emoji headers, `•` bullets, **no** markdown `*`/`_`/`[]` characters) so it
   reads cleanly in Telegram without stray asterisks.
