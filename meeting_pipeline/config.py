@@ -110,6 +110,14 @@ class Config:
     telegram_management_chat_id: Optional[str] = field(
         default_factory=lambda: _get("TELEGRAM_MANAGEMENT_CHAT_ID")
     )
+    # Retry transient Telegram failures (timeouts, 429, 5xx) with exponential
+    # backoff so a report is never lost after a single timeout.
+    telegram_max_retries: int = field(
+        default_factory=lambda: int(_get("TELEGRAM_MAX_RETRIES", "4"))
+    )
+    telegram_request_timeout: int = field(
+        default_factory=lambda: int(_get("TELEGRAM_REQUEST_TIMEOUT", "30"))
+    )
 
     # --- Meeting defaults ---
     default_source: str = field(

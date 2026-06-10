@@ -625,6 +625,79 @@ def test_telegram_sends_converted_bold():
     assert session.calls[0]["text"] == "📋 *Планёрка*\nГотово."
 
 
+class FlakyTelegramSession:
+    """Fails (network error or transient HTTP) a number of times, then succeeds."""
+
+    def __init__(self, fail_times=0, mode="raise", status_code=503):
+        self.fail_times = fail_times
+        self.mode = mode  # "raise" (timeout/connection) or "http"
+        self.status_code = status_code
+        self.calls = 0
+
+    def post(self, url, json=None, timeout=None):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            if self.mode == "raise":
+                raise ConnectionError("simulated network timeout")
+            return FakeResponse(
+                status_code=self.status_code,
+                payload={"ok": False, "description": "try again later"},
+            )
+        return FakeResponse()
+
+
+def test_telegram_retries_network_error_then_succeeds():
+    """A single timeout must NOT lose the report — it retries and lands."""
+    config = _config()
+    config.telegram_max_retries = 4
+    sleeps = []
+    session = FlakyTelegramSession(fail_times=2, mode="raise")
+    telegram = TelegramClient(config, session=session, sleep=sleeps.append)
+    result = telegram.send_message("hello", parse_mode=None)
+    assert result.ok is True
+    assert session.calls == 3  # 2 failures + 1 success
+    assert sleeps == [2, 4]  # exponential backoff between retries
+
+
+def test_telegram_retries_transient_http_then_succeeds():
+    config = _config()
+    config.telegram_max_retries = 4
+    session = FlakyTelegramSession(fail_times=1, mode="http", status_code=503)
+    telegram = TelegramClient(config, session=session, sleep=lambda s: None)
+    result = telegram.send_message("hello", parse_mode=None)
+    assert result.ok is True
+    assert session.calls == 2
+
+
+def test_telegram_gives_up_after_max_retries():
+    config = _config()
+    config.telegram_max_retries = 2
+    session = FlakyTelegramSession(fail_times=99, mode="raise")
+    telegram = TelegramClient(config, session=session, sleep=lambda s: None)
+    result = telegram.send_message("hello", parse_mode=None)
+    assert result.ok is False
+    assert session.calls == 3  # 1 initial + 2 retries, then give up
+    assert "failed" in (result.error or "").lower()
+
+
+def test_get_team_roster_reads_internal_participants():
+    """Roster (and thus absentee detection) is driven by mtg_participants."""
+    repo = _repo()
+    store = repo.client.store
+    store["mtg_participants"] = [
+        {"full_name": "Эмилия Аванесян", "is_internal": True,
+         "metadata": {"role": "руководитель"}},
+        {"full_name": "Оля Бухгалтер", "is_internal": True,
+         "metadata": {"role": "бухгалтер"}},
+        {"full_name": "Внешний Клиент", "is_internal": False, "metadata": None},
+    ]
+    roster = repo.get_team_roster()
+    names = {r["name"] for r in roster}
+    assert names == {"Эмилия Аванесян", "Оля Бухгалтер"}  # internal only
+    by_name = {r["name"]: r["role"] for r in roster}
+    assert by_name["Эмилия Аванесян"] == "руководитель"
+
+
 class _TimelessResp:
     def __init__(self, status_code=200, payload=None):
         self.status_code = status_code

@@ -98,13 +98,24 @@ def _analyze_meeting_inner(
         )
         return {"ok": False, "status": "failed", "analysis": analysis}
 
+    # Roster source of truth: explicit MEETING_TEAM_ROSTER env override if set,
+    # otherwise the internal team in mtg_participants. This is what lets the
+    # report flag accountants who said nothing as "не принимал(а) участия".
+    team_roster = getattr(ai.config, "meeting_team_roster", []) or []
+    if not team_roster:
+        try:
+            team_roster = repo.get_team_roster()
+        except Exception as exc:  # roster is best-effort; never crash analysis
+            log.warning("Could not load team roster from mtg_participants: %s", exc)
+            team_roster = []
+
     result = ai.analyze(
         transcript,
         title=meeting.get("title"),
         meeting_date=meeting_date,
         language=meeting.get("transcript_language"),
         participants=_participants_from_meeting(meeting),
-        team_roster=getattr(ai.config, "meeting_team_roster", []),
+        team_roster=team_roster,
     )
 
     if not result.ok:

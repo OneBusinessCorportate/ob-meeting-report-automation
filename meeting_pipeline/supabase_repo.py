@@ -70,6 +70,31 @@ class SupabaseRepo:
         created = self.client.table("mtg_sources").insert(payload).execute()
         return created.data[0]
 
+    # --- Team roster ----------------------------------------------------------
+    def get_team_roster(self) -> List[Dict[str, str]]:
+        """Internal team roster from ``mtg_participants``.
+
+        This is the source of truth for "go through every accountant and flag
+        the ones who said nothing". Returns ``[{"name":.., "role":..}]`` for
+        every internal participant; ``role`` comes from ``metadata.role`` when
+        present. Empty list when the table has no internal rows.
+        """
+        rows = (
+            self.client.table("mtg_participants")
+            .select("full_name, metadata")
+            .eq("is_internal", True)
+            .execute()
+        ).data or []
+        roster: List[Dict[str, str]] = []
+        for row in rows:
+            name = (row.get("full_name") or "").strip()
+            if not name:
+                continue
+            meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            role = (meta or {}).get("role") or ""
+            roster.append({"name": name, "role": role})
+        return roster
+
     # --- Meetings (L1) --------------------------------------------------------
     def upsert_meeting(
         self,
