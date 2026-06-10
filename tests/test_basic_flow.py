@@ -301,6 +301,15 @@ SAMPLE_REPORT = {
     "praised": [{"name": "Лилит", "reason": "закрыла отчётность вовремя"}],
     "criticized": [{"name": "Армен Строй", "reason": "не передаёт документы"}],
     "problems_risks": [{"text": "Долг клиента", "severity": "high"}],
+    "attention_points": [
+        {
+            "point": "Повторно обсуждали подготовку CSV/QR",
+            "reason": "Тема всплывала несколько раз, владелец неясен",
+            "severity": "medium",
+            "recurring": False,
+            "suggested_follow_up": "Назначить одного ответственного и срок",
+        }
+    ],
     "sentiment": "neutral",
     "meeting_mood": {"overall": "продуктивное", "energy": "medium"},
     "late_start": True,
@@ -467,9 +476,43 @@ def test_analyze_meeting_success():
     # Extra grounded fields (effectiveness score, decision log, praise) are preserved.
     extras = analysis["ai_metadata"]["report_extras"]
     assert extras["effectiveness"]["score"] == 8
+    assert extras["attention_points"][0]["severity"] == "medium"
     assert extras["decisions"][0]["owner"] == "Гор"
     assert extras["praised"][0]["name"] == "Лилит"
     assert extras["criticized"][0]["name"] == "Армен Строй"
+
+
+def test_get_recent_meeting_context_pulls_attention_points():
+    """Prior completed reports surface their summary + attention_points."""
+    repo = _repo()
+    meeting_id = str(uuid.uuid4())
+    # Seed a past meeting and its current completed L2 (with attention_points).
+    repo.client.table("mtg_meetings").insert(
+        {"id": meeting_id, "title": "Прошлая планёрка", "actual_start": "2026-03-20T05:00:00+00:00"}
+    ).execute()
+    repo.create_analysis(
+        meeting_id=meeting_id,
+        status="completed",
+        summary="Прошлая встреча",
+        ai_metadata={"report_extras": {"attention_points": [{"point": "Снова Mega Build"}]}},
+    )
+
+    context = repo.get_recent_meeting_context("2026-03-26T05:00:00+00:00", limit=5)
+    assert len(context) == 1
+    assert context[0]["summary"] == "Прошлая встреча"
+    assert context[0]["attention_points"][0]["point"] == "Снова Mega Build"
+
+
+def test_build_user_prompt_embeds_prior_context():
+    """build_user_prompt carries prior_context into the model input."""
+    from meeting_pipeline.prompts.meeting_analysis_v1 import build_user_prompt
+
+    prompt = build_user_prompt(
+        "transcript",
+        prior_context=[{"date": "2026-03-25", "attention_points": [{"point": "Снова Mega Build"}]}],
+    )
+    assert "prior_context" in prompt
+    assert "Снова Mega Build" in prompt
 
 
 def test_analyze_pending_range_processes_all_days():

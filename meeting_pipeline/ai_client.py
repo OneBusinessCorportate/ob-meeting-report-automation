@@ -44,6 +44,7 @@ _COLUMN_FIELDS = (
 # They are preserved inside ``mtg_analyses.ai_metadata.report_extras``.
 _EXTRA_FIELDS = (
     "effectiveness",
+    "attention_points",
     "decisions",
     "praised",
     "criticized",
@@ -112,6 +113,7 @@ class AIClient:
         time_range: Optional[str] = None,
         participants: Optional[List[str]] = None,
         team_roster: Optional[List[Any]] = None,
+        prior_context: Optional[List[Any]] = None,
         max_tokens: int = 8192,
     ) -> AnalysisResult:
         """Generate a structured L2 report from the FULL transcript."""
@@ -131,6 +133,7 @@ class AIClient:
             time_range=time_range,
             participants=participants,
             team_roster=team_roster,
+            prior_context=prior_context,
         )
 
         start = time.monotonic()

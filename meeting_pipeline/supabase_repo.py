@@ -447,6 +447,55 @@ class SupabaseRepo:
                 return row
         return None
 
+    def get_recent_meeting_context(
+        self, before, *, limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Return short context from recent completed L2 reports.
+
+        For the ``limit`` most recent meetings held strictly before ``before``
+        (a datetime or ISO string), pull each meeting's current completed L2
+        ``summary`` and its ``attention_points`` (from ``report_extras``). This
+        lets the AI flag issues that recur across meetings. Best-effort: returns
+        an empty list and never raises, so it can't break analysis.
+        """
+        try:
+            before_iso = before.isoformat() if hasattr(before, "isoformat") else str(before)
+            meetings = (
+                self.client.table("mtg_meetings")
+                .select("id, title, actual_start")
+                .lt("actual_start", before_iso)
+                .order("actual_start", desc=True)
+                .limit(limit)
+                .execute()
+            ).data or []
+
+            context: List[Dict[str, Any]] = []
+            for meeting in meetings:
+                rows = (
+                    self.client.table("mtg_analyses")
+                    .select("summary, ai_metadata")
+                    .eq("meeting_id", meeting["id"])
+                    .eq("is_current", True)
+                    .eq("status", "completed")
+                    .limit(1)
+                    .execute()
+                ).data
+                if not rows:
+                    continue
+                extras = ((rows[0].get("ai_metadata") or {}).get("report_extras") or {})
+                context.append(
+                    {
+                        "date": (meeting.get("actual_start") or "")[:10],
+                        "title": meeting.get("title"),
+                        "summary": rows[0].get("summary"),
+                        "attention_points": extras.get("attention_points") or [],
+                    }
+                )
+            return context
+        except Exception as exc:  # context is best-effort, never crash analysis
+            log.warning("Could not load prior meeting context: %s", exc)
+            return []
+
     def mark_delivery_status(
         self,
         analysis_id: str,

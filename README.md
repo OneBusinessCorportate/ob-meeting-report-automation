@@ -101,6 +101,17 @@ Per the management requirements, each report (and the Telegram message) covers:
 - **action_items** — task, assignee, deadline, priority, and `how_to_track`.
 - **problems_risks** — situations described in context, with severity, owner,
   deadline and how to track progress.
+- **attention_points** (`Обратить внимание`) — important signals management
+  should notice even when they are not direct action items: repeated
+  requests/topics/clients/documents within the meeting, unclear ownership,
+  missing deadlines, unassigned risks, fragile manual processes, cases that need
+  follow-up, communication problems, blockers that may repeat. Each item carries
+  a `point`, a `reason` (evidence), `severity`, `recurring`, and a
+  `suggested_follow_up`. When prior L2 reports are available they are passed in
+  as context so issues that repeat **across** meetings are flagged
+  `recurring: true` ("(повторяется)"). If nothing important is found, a single
+  `Нет отдельных пунктов` item is returned. Rendered into the Telegram report as
+  a short 👀 ОБРАТИТЬ ВНИМАНИЕ block (max 3–5 bullets).
 - **open_questions** — unresolved questions.
 - **people_mentioned** — who spoke / who was mentioned, with context.
 - **praised / criticized** — who was praised and who was criticized, and why.
@@ -115,12 +126,23 @@ Per the management requirements, each report (and the Telegram message) covers:
   (emoji headers, `•` bullets, **no** markdown `*`/`_`/`[]` characters) so it
   reads cleanly in Telegram without stray asterisks.
 
-`effectiveness`, `decisions`, `praised`, `criticized`, `participant_breakdown`,
-`manager_reactions`, `followup_on_previous_tasks`, `who_took_ownership` and
-`talk_share` have no dedicated column, so they are preserved inside
-`mtg_analyses.ai_metadata.report_extras` (and surfaced in the Telegram report).
-The effectiveness score is therefore queryable for trend tracking via
-`ai_metadata->'report_extras'->'effectiveness'->>'score'`. Nothing is lost.
+`effectiveness`, `attention_points`, `decisions`, `praised`, `criticized`,
+`participant_breakdown`, `manager_reactions`, `followup_on_previous_tasks`,
+`who_took_ownership` and `talk_share` have no dedicated column, so they are
+preserved inside `mtg_analyses.ai_metadata.report_extras` (and surfaced in the
+Telegram report). The effectiveness score is therefore queryable for trend
+tracking via `ai_metadata->'report_extras'->'effectiveness'->>'score'`, and the
+attention points via `ai_metadata->'report_extras'->'attention_points'`. Nothing
+is lost. (If you later want to query/aggregate attention points heavily, the
+clean follow-up is a dedicated `attention_points JSONB` column on `mtg_analyses`
+— a non-breaking additive migration; for now `report_extras` keeps the existing
+L2 structure intact.)
+
+Cross-meeting recurrence: during analysis the pipeline loads the summary +
+attention points of the **5 most recent prior meetings**
+(`SupabaseRepo.get_recent_meeting_context`) and passes them to the model as
+reference-only `prior_context`, so issues that keep coming back are flagged
+`recurring: true`. This lookup is best-effort and never blocks analysis.
 
 ## 4. Why the FULL transcript is required
 

@@ -109,6 +109,13 @@ def _analyze_meeting_inner(
             log.warning("Could not load team roster from mtg_participants: %s", exc)
             team_roster = []
 
+    # Cross-meeting context: summaries + attention_points from recent prior
+    # meetings, so the AI can flag issues that keep recurring. Best-effort.
+    prior_context: List[Dict[str, Any]] = []
+    before = meeting.get("actual_start") or meeting.get("ingested_at")
+    if before:
+        prior_context = repo.get_recent_meeting_context(before, limit=5)
+
     result = ai.analyze(
         transcript,
         title=meeting.get("title"),
@@ -116,6 +123,7 @@ def _analyze_meeting_inner(
         language=meeting.get("transcript_language"),
         participants=_participants_from_meeting(meeting),
         team_roster=team_roster,
+        prior_context=prior_context,
     )
 
     if not result.ok:
