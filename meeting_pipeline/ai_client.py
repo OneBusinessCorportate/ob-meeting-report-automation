@@ -140,31 +140,53 @@ class AIClient:
             prior_context=prior_context,
         )
 
+        # Try once; if the model returns empty/unparseable JSON (most often a
+        # response truncated at max_tokens), retry once with a doubled budget so
+        # a long meeting self-heals instead of failing the whole report.
         start = time.monotonic()
-        try:
-            response = self.client.messages.create(
-                model=self.model_id,
-                max_tokens=max_tokens,
-                system=prompt_v1.SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+        text = ""
+        usage: Dict[str, Any] = {}
+        parsed = None
+        budgets = [max_tokens, min(max_tokens * 2, 32768)]
+        for attempt, budget in enumerate(budgets):
+            try:
+                response = self.client.messages.create(
+                    model=self.model_id,
+                    max_tokens=budget,
+                    system=prompt_v1.SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+            except Exception as exc:
+                log.error("%s API call failed: %s", self.provider, exc)
+                return AnalysisResult(
+                    ok=False,
+                    error=f"AI request failed: {exc}",
+                    model_id=self.model_id,
+                    prompt_version=self.prompt_version,
+                    processing_time_ms=int((time.monotonic() - start) * 1000),
+                )
+
+            text = self._response_text(response)
+            usage = self._usage(response)
+            parsed = extract_json(text)
+            if parsed is not None:
+                break
+            log.error(
+                "Model returned non-JSON / invalid JSON (attempt %d, max_tokens=%d, "
+                "raw_len=%d, tail=%r).",
+                attempt + 1,
+                budget,
+                len(text or ""),
+                (text or "")[-160:],
             )
-        except Exception as exc:
-            log.error("%s API call failed: %s", self.provider, exc)
-            return AnalysisResult(
-                ok=False,
-                error=f"AI request failed: {exc}",
-                model_id=self.model_id,
-                prompt_version=self.prompt_version,
-                processing_time_ms=int((time.monotonic() - start) * 1000),
-            )
+            if attempt + 1 < len(budgets) and budget < budgets[-1]:
+                log.warning(
+                    "Retrying analysis with a larger output budget (%d).", budgets[-1]
+                )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
-        text = self._response_text(response)
-        usage = self._usage(response)
 
-        parsed = extract_json(text)
         if parsed is None:
-            log.error("Model returned non-JSON / invalid JSON output.")
             return AnalysisResult(
                 ok=False,
                 error="AI returned invalid JSON; could not parse structured report.",

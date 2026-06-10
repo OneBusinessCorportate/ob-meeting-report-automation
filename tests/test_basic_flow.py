@@ -503,6 +503,42 @@ def test_get_recent_meeting_context_pulls_attention_points():
     assert context[0]["attention_points"][0]["point"] == "Снова Mega Build"
 
 
+def test_analyze_retries_on_invalid_json_with_bigger_budget():
+    """Invalid/truncated JSON triggers one retry with a doubled token budget."""
+
+    class _FlakyClient:
+        def __init__(self, report):
+            self._report = report
+            self.calls = []
+            self.messages = self
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs["max_tokens"])
+            text = "{ truncated json..." if len(self.calls) == 1 else json.dumps(self._report)
+
+            class _Block:
+                def __init__(self, t):
+                    self.text = t
+
+            class _Usage:
+                input_tokens = 100
+                output_tokens = 50
+
+            class _Resp:
+                content = [_Block(text)]
+                usage = _Usage()
+
+            return _Resp()
+
+    client = _FlakyClient(SAMPLE_REPORT)
+    ai = AIClient(_config(), client=client)
+    result = ai.analyze("long transcript", max_tokens=16384)
+    assert result.ok is True
+    assert result.report["summary"] == SAMPLE_REPORT["summary"]
+    # First attempt at the base budget, retry at double (capped at 32768).
+    assert client.calls == [16384, 32768]
+
+
 def test_build_user_prompt_embeds_prior_context():
     """build_user_prompt carries prior_context into the model input."""
     from meeting_pipeline.prompts.meeting_analysis_v1 import build_user_prompt

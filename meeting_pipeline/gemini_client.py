@@ -108,9 +108,11 @@ class _Messages:
         if system:
             config["system_instruction"] = system
         # Gemini 2.5 models "think" by consuming output tokens before answering,
-        # which can starve/truncate the JSON. Disable thinking for this strict
-        # extraction task so the full budget goes to the structured report.
-        if "2.5" in model:
+        # which can starve/truncate the JSON. Flash lets us disable thinking
+        # entirely (budget 0) so the full budget goes to the structured report.
+        # Pro does NOT allow 0 (it has a minimum thinking budget), so we leave it
+        # at the default there and rely on a generous max_output_tokens instead.
+        if "flash" in model:
             config["thinking_config"] = {"thinking_budget": 0}
 
         contents = self._to_contents(messages)
@@ -145,6 +147,23 @@ class _Messages:
             getattr(meta, "prompt_token_count", None) if meta else None,
             getattr(meta, "candidates_token_count", None) if meta else None,
         )
+        if not text:
+            # Empty text usually means the candidate hit MAX_TOKENS (output
+            # truncated, often by thinking) or was blocked. Surface why so the
+            # failure is diagnosable rather than a bare "invalid JSON".
+            reason = None
+            try:
+                reason = response.candidates[0].finish_reason
+            except Exception:
+                pass
+            log.warning(
+                "Gemini returned empty text (finish_reason=%s, output_tokens=%s, "
+                "max_output_tokens=%s). Likely truncation — raise AI_MAX_OUTPUT_TOKENS "
+                "or use gemini-2.5-pro.",
+                reason,
+                getattr(meta, "candidates_token_count", None) if meta else None,
+                max_tokens,
+            )
         return _Response(text, usage)
 
 
