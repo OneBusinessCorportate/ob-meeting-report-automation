@@ -114,9 +114,13 @@ class AIClient:
         participants: Optional[List[str]] = None,
         team_roster: Optional[List[Any]] = None,
         prior_context: Optional[List[Any]] = None,
-        max_tokens: int = 8192,
+        max_tokens: Optional[int] = None,
     ) -> AnalysisResult:
         """Generate a structured L2 report from the FULL transcript."""
+        # Generous output budget: the structured report can be large, and a too
+        # small cap truncates the JSON mid-object -> "invalid JSON" failures.
+        if max_tokens is None:
+            max_tokens = getattr(self.config, "ai_max_output_tokens", 16384)
         if not transcript_text or not transcript_text.strip():
             return AnalysisResult(
                 ok=False,

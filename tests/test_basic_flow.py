@@ -1001,7 +1001,9 @@ def test_analyze_meeting_success_with_gemini():
     cfg = fake_genai.models.last_call["config"]
     assert cfg["system_instruction"]
     assert cfg["response_mime_type"] == "application/json"
-    assert cfg["max_output_tokens"] == 8192
+    # Output budget comes from config (default 16384) so large reports don't
+    # get truncated into invalid JSON on longer transcripts.
+    assert cfg["max_output_tokens"] == 16384
 
 
 # --------------------------------------------------------------------------- #

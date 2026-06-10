@@ -102,6 +102,13 @@ class Config:
     ai_prompt_version: str = field(
         default_factory=lambda: _get("AI_PROMPT_VERSION", "full_transcript_prompt_v2")
     )
+    # Max output tokens for the structured L2 report. The report (full
+    # participant breakdown + telegram_report_md) can be large; an 8192 cap
+    # truncated the JSON on longer transcripts, producing "invalid JSON"
+    # failures. Default generously and allow override per environment.
+    ai_max_output_tokens: int = field(
+        default_factory=lambda: int(_get("AI_MAX_OUTPUT_TOKENS", "16384"))
+    )
 
     # --- Telegram ---
     telegram_bot_token: Optional[str] = field(
