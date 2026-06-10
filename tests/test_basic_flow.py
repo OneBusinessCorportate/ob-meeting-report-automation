@@ -269,6 +269,18 @@ def _config():
 
 SAMPLE_REPORT = {
     "summary": "Краткое содержание планёрки.",
+    "effectiveness": {
+        "score": 8,
+        "max_score": 10,
+        "verdict": "Хорошая, рабочая встреча.",
+        "criteria": [
+            {"criterion": "Все сотрудники высказались", "status": "выполнено", "detail": "все"},
+            {"criterion": "Эмилия задавала вопросы", "status": "выполнено", "detail": "по кейсам"},
+            {"criterion": "Эмилия поставила задачи", "status": "выполнено", "detail": "Лилит"},
+            {"criterion": "Эмилия поделилась новостями", "status": "частично", "detail": "коротко"},
+            {"criterion": "Эмилия кого-то похвалила", "status": "выполнено", "detail": "Лилит"},
+        ],
+    },
     "topics": [{"topic": "Налоги", "key_points": ["12/15 сдано"], "duration_pct": 30}],
     "decisions": [
         {"decision": "Эскалировать долг Mega Build", "context": "задолженности", "owner": "Гор"}
@@ -294,11 +306,10 @@ SAMPLE_REPORT = {
     "late_start": True,
     "late_start_minutes": 5,
     "mgmt_recommendations": {
-        "focus_points": ["Долг Mega Build"],
-        "recurring_issues": ["Клиенты не присылают первичку"],
-        "risks": ["Расхождение по НДС"],
-        "who_to_support": ["Тагуи — блокирует Армен Строй"],
-        "needs_intervention": ["Прямые переговоры по Mega Build"],
+        "for_whom": "Эмилия (руководитель)",
+        "what_went_well": ["Все высказались по своим кейсам"],
+        "what_to_improve": ["Чаще делиться новостями компании"],
+        "recommendations": ["Заранее проговаривать новости в начале встречи"],
     },
     "telegram_report_md": "📋 **Планёрка**\n\n**Кратко**\nВсё ок.",
 }
@@ -451,10 +462,11 @@ def test_analyze_meeting_success():
     assert analysis["summary"] == SAMPLE_REPORT["summary"]
     assert analysis["telegram_report_md"]
     assert analysis["sentiment"] == "neutral"
-    # Manager briefing is stored in its column as a structured object.
-    assert "needs_intervention" in analysis["mgmt_recommendations"]
-    # Extra grounded fields (decision log, praise/criticism) are preserved.
+    # Manager briefing is stored in its column, now addressed to Эмилия.
+    assert "recommendations" in analysis["mgmt_recommendations"]
+    # Extra grounded fields (effectiveness score, decision log, praise) are preserved.
     extras = analysis["ai_metadata"]["report_extras"]
+    assert extras["effectiveness"]["score"] == 8
     assert extras["decisions"][0]["owner"] == "Гор"
     assert extras["praised"][0]["name"] == "Лилит"
     assert extras["criticized"][0]["name"] == "Армен Строй"

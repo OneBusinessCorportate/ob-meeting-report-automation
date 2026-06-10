@@ -68,10 +68,10 @@ The existing `mtg_*` tables are reused (no parallel system is created):
   `raw_action_items`, `raw_documents`, recording URL, timestamps, etc. Deduped
   by `(source_id, source_meeting_id)`.
 - **L2 (`mtg_analyses`) — AI report layer.** The derived, structured report:
-  `summary`, `topics`, `action_items`, `open_questions`, `people_mentioned`,
-  `problems_risks`, `sentiment`, `meeting_mood`, `late_start` /
-  `late_start_minutes`, `mgmt_recommendations`, and the ready-to-send
-  `telegram_report_md`. Linked to L1 via `meeting_id`, versioned, with
+  the `effectiveness` score (1–10), `summary`, `topics`, `action_items`,
+  `open_questions`, `people_mentioned`, `problems_risks`, `sentiment`,
+  `meeting_mood`, `late_start` / `late_start_minutes`, `mgmt_recommendations`
+  (advice for Эмилия), and the ready-to-send `telegram_report_md`. Linked to L1 via `meeting_id`, versioned, with
   `is_current = true` marking the latest. A DB trigger
   (`supersede_old_analyses`) automatically demotes the previous current row to
   `superseded` when a new current analysis is inserted.
@@ -80,6 +80,13 @@ The existing `mtg_*` tables are reused (no parallel system is created):
 
 Per the management requirements, each report (and the Telegram message) covers:
 
+- **effectiveness** — the headline meeting score on a 1–10 scale (8+ = a good
+  meeting). The agent rates the meeting against a checklist of what a good
+  meeting must have (per Lilit): every employee spoke up, and Эмилия asked
+  questions, set tasks, shared news and praised someone. Each criterion gets a
+  `status` (выполнено / частично / не выполнено). The score is shown at the very
+  top of the Telegram report so you can see at a glance what kind of meeting it
+  was.
 - **summary** — short recap (1-2 sentences, no "Кратко" label).
 - **participant_breakdown** — every accountant by name: what was done yesterday,
   today's plan, which cases, blockers and where help is needed. Anyone on the
@@ -99,17 +106,20 @@ Per the management requirements, each report (and the Telegram message) covers:
 - **praised / criticized** — who was praised and who was criticized, and why.
 - **sentiment** + **meeting_mood** — overall tone, energy, engagement, dominant/silent speakers.
 - **late_start / late_start_minutes** — whether the meeting started late, and by how much.
-- **mgmt_recommendations** — an internal manager briefing (stored, but **not**
-  rendered into the Telegram message per leadership feedback).
+- **mgmt_recommendations** — recommendations addressed to **Эмилия** (not the
+  team) on how to run meetings more effectively, derived from where the
+  effectiveness checklist fell short (`what_went_well`, `what_to_improve`,
+  `recommendations`). This block **is** rendered into the Telegram report.
 - **telegram_report_md** — the final message, written as clean plain text
   (emoji headers, `•` bullets, **no** markdown `*`/`_`/`[]` characters) so it
   reads cleanly in Telegram without stray asterisks.
 
-`decisions`, `praised`, `criticized`, `participant_breakdown`,
+`effectiveness`, `decisions`, `praised`, `criticized`, `participant_breakdown`,
 `manager_reactions`, `followup_on_previous_tasks`, `who_took_ownership` and
 `talk_share` have no dedicated column, so they are preserved inside
 `mtg_analyses.ai_metadata.report_extras` (and surfaced in the Telegram report).
-Nothing is lost.
+The effectiveness score is therefore queryable for trend tracking via
+`ai_metadata->'report_extras'->'effectiveness'->>'score'`. Nothing is lost.
 
 ## 4. Why the FULL transcript is required
 

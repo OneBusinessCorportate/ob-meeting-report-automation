@@ -43,6 +43,7 @@ _COLUMN_FIELDS = (
 # Extra grounded fields the schema requests but which have no dedicated column.
 # They are preserved inside ``mtg_analyses.ai_metadata.report_extras``.
 _EXTRA_FIELDS = (
+    "effectiveness",
     "decisions",
     "praised",
     "criticized",
