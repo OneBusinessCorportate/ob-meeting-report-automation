@@ -56,7 +56,11 @@ _EXTRA_FIELDS = (
 )
 
 # The report is only considered usable if at least these core fields are present.
-_REQUIRED_FIELDS = ("summary", "telegram_report_md")
+# telegram_report_md is no longer required: the Telegram text is rendered by
+# script (meeting_pipeline.report_render) from the structured fields, so the
+# model only supplies values. A model-provided telegram_report_md (older
+# prompts) is still kept as a rendering fallback.
+_REQUIRED_FIELDS = ("summary",)
 
 _VALID_SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
 

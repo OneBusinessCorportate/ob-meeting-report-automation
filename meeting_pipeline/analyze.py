@@ -7,11 +7,12 @@ row with an ``error_message`` instead of crashing.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .ai_client import AIClient
 from .config import Config
+from .report_render import render_telegram_report
 from .supabase_repo import SupabaseRepo
 from .utils import get_logger, parse_date
 
@@ -37,6 +38,26 @@ def _participants_from_meeting(meeting: Dict[str, Any]) -> List[str]:
     meta = meeting.get("metadata") or {}
     participants = meta.get("participants")
     return participants if isinstance(participants, list) else []
+
+
+def _local_hhmm(timestamp: Optional[str], offset_hours: int) -> Optional[str]:
+    if not timestamp:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(hours=offset_hours)
+    return dt.strftime("%H:%M")
+
+
+def _meeting_time_range(meeting: Dict[str, Any], offset_hours: int) -> Optional[str]:
+    start = _local_hhmm(meeting.get("actual_start"), offset_hours)
+    end = _local_hhmm(meeting.get("actual_end"), offset_hours)
+    if start and end:
+        return f"{start}–{end}"
+    return start
 
 
 def analyze_meeting(
@@ -145,6 +166,20 @@ def _analyze_meeting_inner(
     if result.extras:
         ai_metadata["report_extras"] = result.extras
 
+    # The Telegram text is rendered by script with a rigid structure — the AI
+    # only supplies the values. The model's own telegram_report_md (if any) is
+    # used solely as a fallback when rendering fails.
+    telegram_md = report.get("telegram_report_md")
+    try:
+        telegram_md = render_telegram_report(
+            {**report, **(result.extras or {})},
+            meeting_date=meeting_date,
+            time_range=_meeting_time_range(meeting, ai.config.timezone_offset_hours),
+            team_roster=team_roster,
+        )
+    except Exception as exc:  # rendering must never lose a completed analysis
+        log.exception("Telegram report rendering failed; using model text: %s", exc)
+
     analysis = repo.create_analysis(
         meeting_id=meeting["id"],
         status="completed",
@@ -161,7 +196,7 @@ def _analyze_meeting_inner(
         late_start=report.get("late_start"),
         late_start_minutes=report.get("late_start_minutes"),
         mgmt_recommendations=report.get("mgmt_recommendations"),
-        telegram_report_md=report.get("telegram_report_md"),
+        telegram_report_md=telegram_md,
         ai_metadata=ai_metadata or None,
         processing_time_ms=result.processing_time_ms,
     )

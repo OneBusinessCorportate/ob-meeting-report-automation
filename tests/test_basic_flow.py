@@ -635,7 +635,7 @@ def test_record_failed_analysis_never_clobbers_completed():
 
 def test_analyze_meeting_missing_required_field_fails():
     repo = _repo()
-    bad = {"summary": "", "topics": []}  # no summary / telegram_report_md
+    bad = {"summary": "", "topics": []}  # no summary
     ai = AIClient(_config(), client=FakeAnthropic(report=bad))
     meeting = {
         "id": str(uuid.uuid4()),
