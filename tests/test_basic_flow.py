@@ -22,7 +22,11 @@ from meeting_pipeline.ai_client import AIClient
 from meeting_pipeline.gemini_client import GeminiClient
 from meeting_pipeline.analyze import analyze_meeting, extract_full_transcript
 from meeting_pipeline.config import Config
-from meeting_pipeline.deliver import MISSING_REPORT_MESSAGE, deliver_today
+from meeting_pipeline.deliver import (
+    MISSING_REPORT_MENTIONS,
+    MISSING_REPORT_MESSAGE,
+    deliver_today,
+)
 from meeting_pipeline.ingest import (
     build_raw_transcript,
     ingest_from_file,
@@ -903,7 +907,13 @@ def test_deliver_today_missing_report_notifies():
     result = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
     assert result["status"] == "report_not_found"
     assert len(session.calls) == 1
-    assert MISSING_REPORT_MESSAGE in session.calls[0]["text"]
+    text = session.calls[0]["text"]
+    assert MISSING_REPORT_MESSAGE in text
+    # Lilit and Emiliya are @-tagged so they're alerted on a no-report day.
+    assert MISSING_REPORT_MENTIONS in text
+    assert "@saakyans_21" in text and "@emilyaavanesyan" in text
+    # Sent as plain text so the "_" in the username isn't parsed as Markdown.
+    assert session.calls[0].get("parse_mode") is None
 
 
 def _gemini_config():
