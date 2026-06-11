@@ -279,10 +279,11 @@ SAMPLE_REPORT = {
         "verdict": "Хорошая, рабочая встреча.",
         "criteria": [
             {"criterion": "Все сотрудники высказались", "status": "выполнено", "detail": "все"},
-            {"criterion": "Эмилия задавала вопросы", "status": "выполнено", "detail": "по кейсам"},
-            {"criterion": "Эмилия поставила задачи", "status": "выполнено", "detail": "Лилит"},
-            {"criterion": "Эмилия поделилась новостями", "status": "частично", "detail": "коротко"},
-            {"criterion": "Эмилия кого-то похвалила", "status": "выполнено", "detail": "Лилит"},
+            {"criterion": "Руководитель задавала вопросы", "status": "выполнено", "detail": "по кейсам"},
+            {"criterion": "Руководитель поставила задачи", "status": "выполнено", "detail": "Лилит"},
+            {"criterion": "Руководитель поделилась новостями", "status": "частично", "detail": "коротко"},
+            {"criterion": "Руководитель кого-то похвалила", "status": "выполнено", "detail": "Лилит"},
+            {"criterion": "Руководитель спросила про прошлые задачи", "status": "не выполнено", "detail": ""},
         ],
     },
     "topics": [{"topic": "Налоги", "key_points": ["12/15 сдано"], "duration_pct": 30}],
@@ -784,11 +785,15 @@ def test_get_team_roster_reads_internal_participants():
          "metadata": {"role": "руководитель"}},
         {"full_name": "Оля Бухгалтер", "is_internal": True,
          "metadata": {"role": "бухгалтер"}},
+        {"full_name": "Гор Менеджер", "is_internal": True,
+         "metadata": {"role": "менеджер"}},
         {"full_name": "Внешний Клиент", "is_internal": False, "metadata": None},
     ]
     roster = repo.get_team_roster()
     names = {r["name"] for r in roster}
-    assert names == {"Эмилия Аванесян", "Оля Бухгалтер"}  # internal only
+    # Internal only, meeting roles only (Гор-менеджер не из планёрки),
+    # placeholder-фамилия «Бухгалтер» срезается, настоящая остаётся.
+    assert names == {"Эмилия Аванесян", "Оля"}
     by_name = {r["name"]: r["role"] for r in roster}
     assert by_name["Эмилия Аванесян"] == "руководитель"
 

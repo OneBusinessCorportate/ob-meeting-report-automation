@@ -78,7 +78,15 @@ class SupabaseRepo:
         the ones who said nothing". Returns ``[{"name":.., "role":..}]`` for
         every internal participant; ``role`` comes from ``metadata.role`` when
         present. Empty list when the table has no internal rows.
+
+        The daily report covers the accounting stand-up only, so internal
+        people with other roles (e.g. Гор the менеджер) are excluded — they
+        otherwise show up in the "Не было" line of every report. Placeholder
+        surnames in ``full_name`` ("Стелла Бухгалтер") are stripped to the
+        first name; real surnames ("Наира Мхитарян") are kept.
         """
+        meeting_roles = {"руководитель", "бухгалтер"}
+        placeholder_surnames = {"бухгалтер", "менеджер", "руководитель"}
         rows = (
             self.client.table("mtg_participants")
             .select("full_name, metadata")
@@ -91,7 +99,12 @@ class SupabaseRepo:
             if not name:
                 continue
             meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            role = (meta or {}).get("role") or ""
+            role = ((meta or {}).get("role") or "").strip()
+            if role and role.lower() not in meeting_roles:
+                continue
+            parts = name.split()
+            if len(parts) > 1 and parts[-1].lower() in placeholder_surnames:
+                name = " ".join(parts[:-1])
             roster.append({"name": name, "role": role})
         return roster
 
