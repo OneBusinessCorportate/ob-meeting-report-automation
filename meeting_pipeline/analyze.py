@@ -7,12 +7,12 @@ row with an ``error_message`` instead of crashing.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from .ai_client import AIClient
 from .config import Config
-from .report_render import render_telegram_report
+from .report_render import meeting_time_range, render_telegram_report
 from .supabase_repo import SupabaseRepo
 from .utils import get_logger, parse_date
 
@@ -38,26 +38,6 @@ def _participants_from_meeting(meeting: Dict[str, Any]) -> List[str]:
     meta = meeting.get("metadata") or {}
     participants = meta.get("participants")
     return participants if isinstance(participants, list) else []
-
-
-def _local_hhmm(timestamp: Optional[str], offset_hours: int) -> Optional[str]:
-    if not timestamp:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(hours=offset_hours)
-    return dt.strftime("%H:%M")
-
-
-def _meeting_time_range(meeting: Dict[str, Any], offset_hours: int) -> Optional[str]:
-    start = _local_hhmm(meeting.get("actual_start"), offset_hours)
-    end = _local_hhmm(meeting.get("actual_end"), offset_hours)
-    if start and end:
-        return f"{start}–{end}"
-    return start
 
 
 def analyze_meeting(
@@ -174,7 +154,7 @@ def _analyze_meeting_inner(
         telegram_md = render_telegram_report(
             {**report, **(result.extras or {})},
             meeting_date=meeting_date,
-            time_range=_meeting_time_range(meeting, ai.config.timezone_offset_hours),
+            time_range=meeting_time_range(meeting, ai.config.timezone_offset_hours),
             team_roster=team_roster,
         )
     except Exception as exc:  # rendering must never lose a completed analysis

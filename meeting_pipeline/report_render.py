@@ -24,6 +24,7 @@ The layout is the approved report with the requested fixes applied:
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 MISSING = "❌"  # value was not voiced on the meeting
@@ -48,6 +49,10 @@ _MISSING_WORDS = {"", "не указано", "не указан", "не указ
 _NONE_WORDS = {"нет", "-", "–", "нет блокеров", "блокеров нет", "без блокеров", "ничего"}
 
 
+# Placeholder surnames seen in mtg_participants ("Оля Бухгалтер", "Гор Менеджер").
+_PLACEHOLDER_SURNAMES = {"бухгалтер", "менеджер", "руководитель"}
+
+
 def _clean(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
@@ -55,6 +60,52 @@ def _clean(value: Any) -> str:
 def _first_name(name: Any) -> str:
     cleaned = _clean(name)
     return cleaned.split()[0] if cleaned else ""
+
+
+def _person(name: Any, roster_firsts: set) -> str:
+    """Display name for a person: first name for team members, full otherwise.
+
+    The model sometimes returns full names ("Эмилия Аванесян", "Оля Бухгалтер")
+    even though the report shows first names only. Collective assignees
+    ("Все бухгалтеры") and external names ("Гюльчоре Балаян") must NOT be
+    clipped to their first word.
+    """
+    cleaned = _clean(name)
+    if not cleaned:
+        return ""
+    parts = cleaned.split()
+    if parts[0].lower() in roster_firsts:
+        return parts[0]
+    if len(parts) > 1 and all(p.lower() in _PLACEHOLDER_SURNAMES for p in parts[1:]):
+        return parts[0]
+    return cleaned
+
+
+def _roster_firsts(team_roster: Optional[List[Dict[str, Any]]]) -> set:
+    return {
+        _first_name(r.get("name")).lower() for r in team_roster or [] if _first_name(r.get("name"))
+    }
+
+
+def _local_hhmm(timestamp: Optional[str], offset_hours: int) -> Optional[str]:
+    if not timestamp:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(hours=offset_hours)
+    return dt.strftime("%H:%M")
+
+
+def meeting_time_range(meeting: Dict[str, Any], offset_hours: int) -> Optional[str]:
+    """``HH:MM–HH:MM`` (local time) from a meeting row, or None when unknown."""
+    start = _local_hhmm(meeting.get("actual_start"), offset_hours)
+    end = _local_hhmm(meeting.get("actual_end"), offset_hours)
+    if start and end:
+        return f"{start}–{end}"
+    return start
 
 
 def _classify(value: Any) -> Tuple[str, List[str]]:
@@ -131,6 +182,7 @@ def render_telegram_report(
     Sections with no data are dropped whole; the structure never changes.
     """
     manager = _find_manager(team_roster)
+    roster_firsts = _roster_firsts(team_roster)
     lines: List[str] = ["📋 Планёрка бухгалтерии"]
     if meeting_date and time_range:
         lines.append(f"📅 {meeting_date}, {time_range}")
@@ -141,9 +193,9 @@ def render_telegram_report(
     lines += _score_block(data)
     lines += _attendance_block(data, team_roster, manager)
     lines += _accountant_blocks(data, team_roster, manager)
-    lines += _manager_block(data, manager)
-    lines += _risks_block(data)
-    lines += _tasks_block(data)
+    lines += _manager_block(data, manager, roster_firsts)
+    lines += _risks_block(data, roster_firsts)
+    lines += _tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
 
     return _finalize(lines)
@@ -163,8 +215,10 @@ def _score_block(data: Dict[str, Any]) -> List[str]:
             out.append(verdict)
     if criteria:
         out.append("Что было на встрече:")
-        for i, label in enumerate(CRITERIA_LABELS):
-            status = _clean((criteria[i] or {}).get("status")) if i < len(criteria) else ""
+        # Older stored analyses have 5 checklist items (no followup criterion);
+        # render only what was actually assessed instead of inventing a ❌.
+        for i, label in enumerate(CRITERIA_LABELS[: len(criteria)]):
+            status = _clean((criteria[i] or {}).get("status"))
             icon = _STATUS_ICONS.get(status.lower(), MISSING)
             out.append(f"  {icon} {label}")
     talk = data.get("talk_share") or {}
@@ -269,7 +323,7 @@ def _accountant_blocks(
     return out
 
 
-def _manager_block(data: Dict[str, Any], manager: str) -> List[str]:
+def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> List[str]:
     reactions = data.get("manager_reactions") or []
     grouped: Dict[str, List[str]] = {}
     order: List[str] = []
@@ -279,7 +333,7 @@ def _manager_block(data: Dict[str, Any], manager: str) -> List[str]:
             continue
         to_whom = _clean(reaction.get("to_whom")) or "Общее"
         key = "Общее" if to_whom.lower() in {"общее", "все", "всем", "команда", "команде"} \
-            else _first_name(to_whom)
+            else _person(to_whom, roster_firsts)
         if key not in grouped:
             grouped[key] = []
             order.append(key)
@@ -295,7 +349,14 @@ def _manager_block(data: Dict[str, Any], manager: str) -> List[str]:
     return out
 
 
-def _risks_block(data: Dict[str, Any]) -> List[str]:
+def _person_or_cross(value: Any, roster_firsts: set) -> str:
+    kind, items = _classify(value)
+    if kind != "items":
+        return MISSING
+    return "; ".join(_person(item, roster_firsts) for item in items)
+
+
+def _risks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
     risks = [r for r in data.get("problems_risks") or [] if _clean(r.get("text"))]
     if not risks:
         return []
@@ -304,7 +365,7 @@ def _risks_block(data: Dict[str, Any]) -> List[str]:
         severity = _clean(risk.get("severity")).lower()
         out.append(f"{i}. {_clean(risk.get('text'))}")
         out.append(f"Риск: {_SEVERITY_ICONS.get(severity, '🟡')}")
-        out.append(f"Ответственный: {_value_or_cross(risk.get('owner'))}")
+        out.append(f"Ответственный: {_person_or_cross(risk.get('owner'), roster_firsts)}")
         out.append(f"Срок: {_value_or_cross(risk.get('deadline'))}")
         how = _clean(risk.get("how_to_track"))
         if how and how.lower() not in _MISSING_WORDS:
@@ -313,7 +374,7 @@ def _risks_block(data: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _tasks_block(data: Dict[str, Any]) -> List[str]:
+def _tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
     items = [t for t in data.get("action_items") or [] if _clean(t.get("text"))]
     if not items:
         return []
@@ -321,7 +382,7 @@ def _tasks_block(data: Dict[str, Any]) -> List[str]:
     order: List[str] = []
     for item in items:
         kind, names = _classify(item.get("assignee"))
-        assignee = _first_name(names[0]) if kind == "items" else "Не указано"
+        assignee = _person(names[0], roster_firsts) if kind == "items" else "Не указано"
         if assignee not in grouped:
             grouped[assignee] = []
             order.append(assignee)

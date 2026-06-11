@@ -711,6 +711,63 @@ def test_deliver_today_sends_report():
     assert "Планёрка" in session.calls[0]["text"]
 
 
+def test_deliver_rerenders_stored_report_with_current_template():
+    """Old stored analyses are re-rendered with the current rigid template.
+
+    The 2026-03-24 report went out in the legacy model-written format because
+    delivery used the stored text as-is. Now delivery re-renders from the
+    structured extras, so template fixes apply without re-running the AI.
+    """
+    config = _config()
+    repo = _repo()
+    repo.client.store["mtg_participants"] = [
+        {"full_name": "Эмилия Аванесян", "is_internal": True,
+         "metadata": {"role": "руководитель"}},
+        {"full_name": "Стелла Бухгалтер", "is_internal": True,
+         "metadata": {"role": "бухгалтер"}},
+    ]
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_2026_03_24",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-03-24T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    legacy_md = "⚠️ Ситуация 1. Старый формат.\nСтепень риска: высокая"
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md=legacy_md,
+        problems_risks=[{"text": "Долг клиента.", "severity": "high",
+                         "owner": "Эмилия Аванесян", "deadline": "не указан"}],
+        ai_metadata={"report_extras": {
+            "effectiveness": {
+                "score": 6, "verdict": "Нормально.",
+                "criteria": [{"criterion": "Все сотрудники высказались",
+                              "status": "частично"}],
+            },
+            "participant_breakdown": [
+                {"name": "Стелла", "participated": True,
+                 "yesterday": "Указала должников.", "today_plan": [],
+                 "blockers": ["нет"]},
+            ],
+        }},
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = deliver_today(config, date_str="2026-03-24", repo=repo, telegram=telegram)
+    assert result["delivered"] is True
+    text = session.calls[0]["text"]
+    # Current template, not the stored legacy text.
+    assert "Степень риска" not in text and "Ситуация 1" not in text
+    assert "🟡 Все высказались" in text
+    assert "Риск: 🔴" in text
+    assert "Ответственный: Эмилия" in text
+    assert "👤 Стелла" in text and "План на сегодня: ❌" in text and "Блокеры: –" in text
+
+
 def test_telegram_sends_converted_bold():
     config = _config()
     session = FakeTelegramSession()

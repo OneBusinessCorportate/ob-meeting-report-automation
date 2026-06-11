@@ -194,3 +194,61 @@ def test_renders_without_roster():
     text = render_telegram_report(FULL_DATA, meeting_date="2026-06-10")
     assert "Кто был: Эмилия (руководитель), Стелла, Оля" in text
     assert "Не было: Тагуи" in text
+
+
+def test_full_names_normalized_collectives_and_clients_kept():
+    """Model output from real runs uses full names — the report shows first names.
+
+    Collective assignees («Все бухгалтеры») and client names («Гюльчоре
+    Балаян») must not be clipped to their first word.
+    """
+    data = {
+        "problems_risks": [
+            {"text": "Долг по DG Finance.", "severity": "high",
+             "owner": "Эмилия Аванесян", "deadline": "не указан"},
+            {"text": "Клиент Гюльчоре Балаян отказывается платить.", "severity": "high",
+             "owner": "Гюльчоре Балаян", "deadline": "Не указано"},
+        ],
+        "action_items": [
+            {"text": "Наире подготовить информацию о клиентах с оборотом более 200 млн",
+             "assignee": "Наира Мхитарян", "deadline": "не указан"},
+            {"text": "Проверить свои банковские коды",
+             "assignee": "Все бухгалтеры", "deadline": "2026-03-24"},
+            {"text": "Разобраться с делами Алекса",
+             "assignee": "Тагуи Бухгалтер", "deadline": "Не указано"},
+        ],
+        "manager_reactions": [
+            {"to_whom": "Наира Мхитарян", "type": "задача", "text": "Узнай про Сианну Алиеву."},
+        ],
+    }
+    roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
+    text = render_telegram_report(data, meeting_date="2026-03-24", team_roster=roster)
+    assert "Ответственный: Эмилия\n" in text
+    assert "Ответственный: Гюльчоре Балаян" in text  # client name kept whole
+    assert "👤 Наира:" in text and "Наира Мхитарян:" not in text
+    assert "👤 Все бухгалтеры:\n1. Проверить свои банковские коды. Срок: 2026-03-24" in text
+    assert "👤 Тагуи:\n1. Разобраться с делами Алекса. Срок: ❌" in text
+    assert "Наира: Узнай про Сианну Алиеву." in text
+    assert "не указан" not in text  # all missing deadlines became ❌
+
+
+def test_old_analysis_with_five_criteria_renders_five_lines():
+    data = {
+        "effectiveness": {
+            "score": 6,
+            "verdict": "Нормальная встреча.",
+            "criteria": [
+                {"criterion": "Все сотрудники высказались", "status": "частично"},
+                {"criterion": "Эмилия задавала вопросы", "status": "выполнено"},
+                {"criterion": "Эмилия поставила задачи", "status": "выполнено"},
+                {"criterion": "Эмилия поделилась новостями", "status": "частично"},
+                {"criterion": "Эмилия кого-то похвалила", "status": "не выполнено"},
+            ],
+        }
+    }
+    text = render_telegram_report(data, meeting_date="2026-03-24", team_roster=ROSTER)
+    # Canonical «Руководитель» labels even for old stored criteria…
+    assert "  🟡 Все высказались" in text
+    assert "  ✅ Руководитель задавала вопросы" in text
+    # …but no invented 6th item: it was not assessed back then.
+    assert "Руководитель спросила про прошлые задачи" not in text

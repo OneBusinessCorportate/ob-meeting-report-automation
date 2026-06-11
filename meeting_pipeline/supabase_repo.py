@@ -429,7 +429,7 @@ class SupabaseRepo:
 
         meetings = (
             self.client.table("mtg_meetings")
-            .select("id, title, actual_start")
+            .select("id, title, actual_start, actual_end")
             .gte("actual_start", start_utc.isoformat())
             .lt("actual_start", end_utc.isoformat())
             .execute()
@@ -437,7 +437,7 @@ class SupabaseRepo:
         if not meetings:
             meetings = (
                 self.client.table("mtg_meetings")
-                .select("id, title, actual_start")
+                .select("id, title, actual_start, actual_end")
                 .gte("ingested_at", start_utc.isoformat())
                 .lt("ingested_at", end_utc.isoformat())
                 .execute()
