@@ -124,8 +124,9 @@ def test_accountant_blocks_cross_and_dash_semantics():
     assert "  – Регистрация зарплат по клиенту Альфа" in olya
     assert "Блокеры: Список задолженностей не обновляется" in olya
     assert "Нужна помощь" not in olya  # optional line omitted when empty
-    # Тагуи did not participate.
+    # Тагуи did not participate — and non-participants are listed FIRST.
     assert "👤 Тагуи\nНе принимал(а) участия." in text
+    assert text.index("👤 Тагуи") < text.index("👤 Стелла") < text.index("👤 Оля")
     # The manager has no personal accountant block.
     assert "👤 Эмилия\n" not in text
 

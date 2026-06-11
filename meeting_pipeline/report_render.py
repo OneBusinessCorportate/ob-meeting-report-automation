@@ -15,6 +15,7 @@ The layout is the approved report with the requested fixes applied:
 - a blank line before «Не было» so absentees stand out;
 - mandatory «Отчёт за вчера / План на сегодня / Блокеры» per accountant:
   ❌ when not voiced, «–» when the person explicitly said there is nothing;
+- accountants who did NOT participate are listed first, before the reports;
 - manager remarks grouped: one «Общее» line, numbered items per person,
   no «поручила»;
 - risks numbered «1.» (no word «Ситуация»), separated by blank lines, with
@@ -301,11 +302,17 @@ def _accountant_blocks(
     if not entries:
         return []
 
-    # Stable order: roster order first, then anyone extra in encounter order.
+    # Non-participants go FIRST so silence is impossible to miss; within each
+    # group the order is stable: roster order, then anyone extra as encountered.
     roster_order = {
         _first_name(r.get("name")).lower(): i for i, r in enumerate(team_roster or [])
     }
-    entries.sort(key=lambda e: roster_order.get(_first_name(e.get("name")).lower(), len(roster_order)))
+    entries.sort(
+        key=lambda e: (
+            bool(e.get("participated")),
+            roster_order.get(_first_name(e.get("name")).lower(), len(roster_order)),
+        )
+    )
 
     out: List[str] = []
     for entry in entries:
