@@ -596,15 +596,27 @@ class SupabaseRepo:
                     s for s in extras.get("previous_tasks_status") or []
                     if isinstance(s, dict) and (s.get("task") or "").strip()
                 ]
-                done = 0
+                done = partial = assessed = 0
                 per_assignee: Dict[str, Dict[str, int]] = {}
                 for status in statuses:
                     assignee = (status.get("assignee") or "Не указано").strip()
-                    bucket = per_assignee.setdefault(assignee, {"done": 0, "total": 0})
+                    bucket = per_assignee.setdefault(
+                        assignee, {"done": 0, "partial": 0, "assessed": 0, "total": 0}
+                    )
                     bucket["total"] += 1
-                    if (status.get("status") or "").strip().lower() == "выполнено":
+                    state = (status.get("status") or "").strip().lower()
+                    # «не упоминалось» stays out of the score: nobody asked, so
+                    # it must not count against the person (fair grading).
+                    if state == "не упоминалось":
+                        continue
+                    bucket["assessed"] += 1
+                    assessed += 1
+                    if state == "выполнено":
                         bucket["done"] += 1
                         done += 1
+                    elif state == "частично":
+                        bucket["partial"] += 1
+                        partial += 1
                 breakdown = [
                     p for p in extras.get("participant_breakdown") or []
                     if isinstance(p, dict) and (p.get("name") or "").strip()
@@ -614,6 +626,8 @@ class SupabaseRepo:
                         "date": (meeting.get("actual_start") or "")[:10],
                         "score": (extras.get("effectiveness") or {}).get("score"),
                         "tasks_done": done,
+                        "tasks_partial": partial,
+                        "tasks_assessed": assessed,
                         "tasks_total": len(statuses),
                         "per_assignee": per_assignee,
                         "has_participation": bool(breakdown),

@@ -235,18 +235,22 @@ def test_analytics_block_with_completion_rates_and_trends():
     assert "📈 АНАЛИТИКА" in text
     # Analytics close the report (after the open questions).
     assert text.index("📈 АНАЛИТИКА") > text.index("❓ ОТКРЫТЫЕ ВОПРОСЫ")
-    # Team and per-accountant completion rates are computed by script.
-    assert "Задачи с прошлой планёрки: выполнено 1 из 4 (25%)" in text
+    # Fair team score: «частично» = half a point, the unmentioned task is NOT
+    # counted against anyone — 3 assessed: 1 done + 0.5 partial -> 50%.
+    assert ("Задачи с прошлой планёрки: 50% (✅ 1, 🟡 1, ❌ 1 из 3 обсуждённых; "
+            "❓ 1 не обсуждались)") in text
     # Personal trend against the person's own previous result.
-    assert "👤 Оля: выполнено 1 из 3 (33%), прошлая планёрка 0% ↗️" in text
+    assert "👤 Оля: 50% (✅ 1, 🟡 1, ❌ 1 из 3), прошлая планёрка 0% ↗️" in text
     assert "  ✅ Отправить платежное поручение. — сказала, что отправила" in text
     assert "  ❌ Заключить договор с Бета." in text
     assert "  🟡 Проверить банковские коды." in text
-    assert "👤 Наира: выполнено 0 из 1 (0%), прошлая планёрка 0% ➡️" in text
+    # Наира's only task was not discussed: no 0%, a neutral line instead.
+    assert "👤 Наира: задачи на встрече не обсуждались" in text
+    assert "Наира: 0%" not in text
     assert "  ❓ Подготовить список клиентов с оборотом 200 млн." in text
     # Completion trend across stand-ups + the script-computed average.
-    assert "Динамика выполнения задач:\n  10.06: 25%\n  11.06: 0%\n  сегодня: 25% ↗️" in text
-    assert "среднее за 3 планёрки(ок): 17%" in text
+    assert "Динамика выполнения задач:\n  10.06: 25%\n  11.06: 0%\n  сегодня: 50% ↗️" in text
+    assert "среднее за 3 планёрки(ок): 25%" in text
     # Attendance: misses over the window (2 prior + today).
     assert "Пропуски за последние 3 планёрки(ок):" in text
     assert "  Аваг: 3 из 3" in text
@@ -254,11 +258,16 @@ def test_analytics_block_with_completion_rates_and_trends():
     # Manager talk-share trend and score chain.
     assert "Доля руководителя в разговоре: 75% → 70% ↘️" in text
     assert "Оценка встречи: 5 → 6 → 7 из 10 ↗️" in text
-    # Script-detected signals.
+    # Good news first, then softly-worded signals.
+    assert "🏆 ПРОГРЕСС" in text
+    assert "  – Оля: рост с 0% до 50% 📈" in text
+    assert "  – Команда: выполнение задач выросло с 0% до 50%" in text
+    assert text.index("🏆 ПРОГРЕСС") < text.index("❗ СИГНАЛЫ")
     assert "❗ СИГНАЛЫ" in text
-    assert "  – Наира: 0% выполнения вторую планёрку подряд." in text
-    assert "  – Задач с прошлой планёрки, про которые никто не вспомнил: 1." in text
-    assert "  – Аваг: не было ни на одной из последних 3 планёрок." in text
+    assert ("  – Задачи без статуса (❓ 1) — о них никто не спросил на встрече; "
+            "стоит пройтись по ним на следующей планёрке.") in text
+    assert ("  – Аваг не участвует в планёрках (3 из 3) — стоит уточнить "
+            "причину (возможно, отпуск или другой график).") in text
 
 
 def test_analytics_block_skipped_without_data():

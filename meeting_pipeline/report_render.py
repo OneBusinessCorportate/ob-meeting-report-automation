@@ -391,14 +391,45 @@ def _trend_arrow(current: float, previous: float) -> str:
     return " ➡️"
 
 
+def _fair_pct(done: int, partial: int, assessed: int) -> Optional[int]:
+    """Fair completion percent: «частично» is half a point, only DISCUSSED
+    tasks count (a task nobody asked about must not lower anyone's score)."""
+    if not assessed:
+        return None
+    return round(100 * (done + 0.5 * partial) / assessed)
+
+
+def _bucket_pct(bucket: Dict[str, Any]) -> Optional[int]:
+    assessed = bucket.get("assessed", bucket.get("total") or 0)
+    return _fair_pct(bucket.get("done") or 0, bucket.get("partial") or 0, assessed)
+
+
+def _entry_pct(entry: Dict[str, Any]) -> Optional[int]:
+    assessed = entry.get("tasks_assessed", entry.get("tasks_total") or 0)
+    return _fair_pct(
+        entry.get("tasks_done") or 0, entry.get("tasks_partial") or 0, assessed
+    )
+
+
+def _counts(done: int, partial: int, failed: int) -> str:
+    parts = []
+    if done:
+        parts.append(f"✅ {done}")
+    if partial:
+        parts.append(f"🟡 {partial}")
+    if failed:
+        parts.append(f"❌ {failed}")
+    return ", ".join(parts)
+
+
 def _assignee_history(
     prior_stats: List[Dict[str, Any]], name: str, roster_firsts: set
 ) -> List[Dict[str, int]]:
-    """Per-meeting done/total for one person across prior stand-ups (oldest first)."""
+    """Per-meeting stats for one person across prior stand-ups (oldest first)."""
     history = []
     for entry in prior_stats:
         for raw, bucket in (entry.get("per_assignee") or {}).items():
-            if _person(raw, roster_firsts) == name and (bucket or {}).get("total"):
+            if _person(raw, roster_firsts) == name and _bucket_pct(bucket) is not None:
                 history.append(bucket)
                 break
     return history
@@ -419,21 +450,39 @@ def _analytics_block(
         s for s in data.get("previous_tasks_status") or [] if _clean(s.get("task"))
     ]
     prior_stats = prior_stats or []
-    history = [s for s in prior_stats if s.get("tasks_total") and s.get("date")]
+    history = [
+        s for s in prior_stats if _entry_pct(s) is not None and s.get("date")
+    ]
     if not statuses and not history:
         return []
 
     out = ["📈 АНАЛИТИКА"]
+    progress: List[str] = []
     signals: List[str] = []
+
+    def _status_of(task: Dict[str, Any]) -> str:
+        return _clean(task.get("status")).lower()
 
     today_pct: Optional[int] = None
     if statuses:
-        done = sum(1 for s in statuses if _clean(s.get("status")).lower() == "выполнено")
-        today_pct = round(100 * done / len(statuses))
-        out.append(
-            f"Задачи с прошлой планёрки: выполнено {done} из {len(statuses)} "
-            f"({today_pct}%)"
-        )
+        done = sum(1 for s in statuses if _status_of(s) == "выполнено")
+        partial = sum(1 for s in statuses if _status_of(s) == "частично")
+        unmentioned = sum(1 for s in statuses if _status_of(s) == "не упоминалось")
+        assessed = len(statuses) - unmentioned
+        failed = assessed - done - partial
+        today_pct = _fair_pct(done, partial, assessed)
+        if today_pct is not None:
+            line = (
+                f"Задачи с прошлой планёрки: {today_pct}% "
+                f"({_counts(done, partial, failed)} из {assessed} обсуждённых"
+            )
+            line += f"; ❓ {unmentioned} не обсуждались)" if unmentioned else ")"
+            out.append(line)
+        else:
+            out.append(
+                "Задачи с прошлой планёрки на встрече не обсуждались "
+                f"(❓ {unmentioned})."
+            )
         out.append("")
 
         grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -447,20 +496,44 @@ def _analytics_block(
             grouped[assignee].append(status)
         for assignee in order:
             tasks = grouped[assignee]
-            done = sum(1 for t in tasks if _clean(t.get("status")).lower() == "выполнено")
-            pct = round(100 * done / len(tasks))
-            header = f"👤 {assignee}: выполнено {done} из {len(tasks)} ({pct}%)"
-            # Personal trend against this person's previous stand-up result.
-            person_history = _assignee_history(prior_stats, assignee, roster_firsts)
-            if person_history:
-                prev = person_history[-1]
-                prev_pct = round(100 * prev["done"] / prev["total"])
-                header += f", прошлая планёрка {prev_pct}%{_trend_arrow(pct, prev_pct)}"
-                if pct == 0 and prev_pct == 0:
-                    signals.append(f"{assignee}: 0% выполнения вторую планёрку подряд.")
+            a_done = sum(1 for t in tasks if _status_of(t) == "выполнено")
+            a_partial = sum(1 for t in tasks if _status_of(t) == "частично")
+            a_unmentioned = sum(1 for t in tasks if _status_of(t) == "не упоминалось")
+            a_assessed = len(tasks) - a_unmentioned
+            pct = _fair_pct(a_done, a_partial, a_assessed)
+            if pct is None:
+                # No task was discussed: this is NOT the person's failure —
+                # show it neutrally, without a score.
+                header = f"👤 {assignee}: задачи на встрече не обсуждались"
+            else:
+                header = (
+                    f"👤 {assignee}: {pct}% "
+                    f"({_counts(a_done, a_partial, a_assessed - a_done - a_partial)}"
+                    f" из {a_assessed})"
+                )
+                person_history = _assignee_history(prior_stats, assignee, roster_firsts)
+                if person_history:
+                    prev_pct = _bucket_pct(person_history[-1])
+                    if prev_pct is not None:
+                        header += (
+                            f", прошлая планёрка {prev_pct}%"
+                            f"{_trend_arrow(pct, prev_pct)}"
+                        )
+                        if pct > prev_pct:
+                            progress.append(
+                                f"{assignee}: рост с {prev_pct}% до {pct}% 📈"
+                            )
+                        elif pct == 0 and prev_pct == 0:
+                            signals.append(
+                                f"У {assignee} вторую планёрку подряд не получается "
+                                "закрыть задачи — возможно, нужна помощь или "
+                                "пересмотр приоритетов."
+                            )
+                if pct == 100:
+                    progress.append(f"{assignee}: все обсуждённые задачи закрыты 👏")
             out.append(header)
             for task in tasks:
-                icon = _PREV_TASK_ICONS.get(_clean(task.get("status")).lower(), "❓")
+                icon = _PREV_TASK_ICONS.get(_status_of(task), "❓")
                 line = f"  {icon} {_clean(task.get('task'))}"
                 evidence = _clean(task.get("evidence"))
                 if evidence and evidence.lower() not in _MISSING_WORDS:
@@ -468,22 +541,24 @@ def _analytics_block(
                 out.append(line)
             out.append("")
 
-        unmentioned = sum(
-            1 for s in statuses if _clean(s.get("status")).lower() == "не упоминалось"
-        )
         if unmentioned:
             signals.append(
-                f"Задач с прошлой планёрки, про которые никто не вспомнил: {unmentioned}."
+                f"Задачи без статуса (❓ {unmentioned}) — о них никто не спросил "
+                "на встрече; стоит пройтись по ним на следующей планёрке."
             )
 
     # Completion-rate trend across the recent stand-ups (script-computed).
     if history and (today_pct is not None or len(history) >= 2):
         out.append("Динамика выполнения задач:")
-        pcts = [round(100 * e["tasks_done"] / e["tasks_total"]) for e in history]
+        pcts = [_entry_pct(e) for e in history]
         for entry, pct in zip(history, pcts):
             out.append(f"  {_dd_mm(entry['date'])}: {pct}%")
         if today_pct is not None:
             out.append(f"  сегодня: {today_pct}%{_trend_arrow(today_pct, pcts[-1])}")
+            if today_pct > pcts[-1]:
+                progress.append(
+                    f"Команда: выполнение задач выросло с {pcts[-1]}% до {today_pct}%"
+                )
             pcts.append(today_pct)
         out.append(f"  среднее за {len(pcts)} планёрки(ок): {round(sum(pcts) / len(pcts))}%")
         out.append("")
@@ -510,8 +585,9 @@ def _analytics_block(
                 out.append(f"  {name}: {count} из {total_meetings}")
                 if count == total_meetings:
                     signals.append(
-                        f"{name}: не было ни на одной из последних "
-                        f"{total_meetings} планёрок."
+                        f"{name} не участвует в планёрках ({count} из "
+                        f"{total_meetings}) — стоит уточнить причину (возможно, "
+                        "отпуск или другой график)."
                     )
             out.append("")
 
@@ -534,6 +610,12 @@ def _analytics_block(
             f"Оценка встречи: {chain} из 10"
             f"{_trend_arrow(float(score), float(prior_scores[-1]))}"
         )
+        out.append("")
+
+    # Good news first: people should see progress, not only problems.
+    if progress:
+        out.append("🏆 ПРОГРЕСС")
+        out.extend(f"  – {item}" for item in progress)
         out.append("")
 
     if signals:
