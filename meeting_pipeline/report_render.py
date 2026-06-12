@@ -175,12 +175,15 @@ def render_telegram_report(
     meeting_date: Optional[str] = None,
     time_range: Optional[str] = None,
     team_roster: Optional[List[Dict[str, Any]]] = None,
+    prior_stats: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Build the full Telegram report text from the structured analysis JSON.
 
     ``data`` is the merged report (column fields + extras: ``effectiveness``,
     ``participant_breakdown``, ``manager_reactions``, ``talk_share``, …).
-    Sections with no data are dropped whole; the structure never changes.
+    ``prior_stats`` (oldest first, from ``get_prior_meeting_stats``) powers the
+    trend lines of the analytics block. Sections with no data are dropped
+    whole; the structure never changes.
     """
     manager = _find_manager(team_roster)
     roster_firsts = _roster_firsts(team_roster)
@@ -197,8 +200,8 @@ def render_telegram_report(
     lines += _manager_block(data, manager, roster_firsts)
     lines += _risks_block(data)
     lines += _tasks_block(data, roster_firsts)
-    lines += _previous_tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
+    lines += _analytics_block(data, prior_stats, roster_firsts)
 
     return _finalize(lines)
 
@@ -374,38 +377,101 @@ _PREV_TASK_ICONS = {
 }
 
 
-def _previous_tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
-    """Динамика: статус задач прошлой планёрки и % выполнения по бухгалтеру."""
+def _dd_mm(iso_date: Any) -> str:
+    text = _clean(iso_date)
+    parts = text.split("-")
+    return f"{parts[2]}.{parts[1]}" if len(parts) == 3 else text
+
+
+def _trend_arrow(current: float, previous: float) -> str:
+    if current > previous:
+        return " ↗️"
+    if current < previous:
+        return " ↘️"
+    return " ➡️"
+
+
+def _analytics_block(
+    data: Dict[str, Any],
+    prior_stats: Optional[List[Dict[str, Any]]],
+    roster_firsts: set,
+) -> List[str]:
+    """Аналитика в конце отчёта: динамика, которую видят бухгалтеры.
+
+    Статусы задач определяет ИИ по расшифровке, но ВСЕ цифры (проценты,
+    тренды) считает этот скрипт — они не могут быть выдуманы.
+    """
     statuses = [
         s for s in data.get("previous_tasks_status") or [] if _clean(s.get("task"))
     ]
-    if not statuses:
+    prior_stats = prior_stats or []
+    history = [
+        s for s in prior_stats
+        if s.get("tasks_total") and s.get("date")
+    ]
+    if not statuses and not history:
         return []
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    order: List[str] = []
-    for status in statuses:
-        kind, names = _classify(status.get("assignee"))
-        assignee = _person(names[0], roster_firsts) if kind == "items" else "Не указано"
-        if assignee not in grouped:
-            grouped[assignee] = []
-            order.append(assignee)
-        grouped[assignee].append(status)
 
-    out = ["📈 ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ"]
-    for assignee in order:
-        tasks = grouped[assignee]
-        done = sum(1 for t in tasks if _clean(t.get("status")).lower() == "выполнено")
-        pct = round(100 * done / len(tasks))
-        out.append(f"👤 {assignee}: выполнено {done} из {len(tasks)} ({pct}%)")
-        for task in tasks:
-            icon = _PREV_TASK_ICONS.get(_clean(task.get("status")).lower(), "❓")
-            line = f"  {icon} {_clean(task.get('task'))}"
-            evidence = _clean(task.get("evidence"))
-            if evidence and evidence.lower() not in _MISSING_WORDS:
-                line += f" — {evidence}"
-            out.append(line)
+    out = ["📈 АНАЛИТИКА"]
+
+    today_pct: Optional[int] = None
+    if statuses:
+        done = sum(1 for s in statuses if _clean(s.get("status")).lower() == "выполнено")
+        today_pct = round(100 * done / len(statuses))
+        out.append(
+            f"Задачи с прошлой планёрки: выполнено {done} из {len(statuses)} "
+            f"({today_pct}%)"
+        )
         out.append("")
-    return out
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        order: List[str] = []
+        for status in statuses:
+            kind, names = _classify(status.get("assignee"))
+            assignee = _person(names[0], roster_firsts) if kind == "items" else "Не указано"
+            if assignee not in grouped:
+                grouped[assignee] = []
+                order.append(assignee)
+            grouped[assignee].append(status)
+        for assignee in order:
+            tasks = grouped[assignee]
+            done = sum(1 for t in tasks if _clean(t.get("status")).lower() == "выполнено")
+            pct = round(100 * done / len(tasks))
+            out.append(f"👤 {assignee}: выполнено {done} из {len(tasks)} ({pct}%)")
+            for task in tasks:
+                icon = _PREV_TASK_ICONS.get(_clean(task.get("status")).lower(), "❓")
+                line = f"  {icon} {_clean(task.get('task'))}"
+                evidence = _clean(task.get("evidence"))
+                if evidence and evidence.lower() not in _MISSING_WORDS:
+                    line += f" — {evidence}"
+                out.append(line)
+            out.append("")
+
+    # Completion-rate trend across the recent stand-ups (script-computed).
+    if history and (today_pct is not None or len(history) >= 2):
+        out.append("Динамика выполнения задач:")
+        last_pct: Optional[int] = None
+        for entry in history:
+            pct = round(100 * entry["tasks_done"] / entry["tasks_total"])
+            out.append(f"  {_dd_mm(entry['date'])}: {pct}%")
+            last_pct = pct
+        if today_pct is not None:
+            arrow = _trend_arrow(today_pct, last_pct) if last_pct is not None else ""
+            out.append(f"  сегодня: {today_pct}%{arrow}")
+        out.append("")
+
+    # Meeting-score trend: today's score against the previous stand-up.
+    score = (data.get("effectiveness") or {}).get("score")
+    prior_scores = [s.get("score") for s in prior_stats if s.get("score")]
+    if score and prior_scores:
+        previous = prior_scores[-1]
+        out.append(
+            f"Оценка встречи: {int(previous)} → {int(score)} из 10"
+            f"{_trend_arrow(float(score), float(previous))}"
+        )
+        out.append("")
+
+    return out if len(out) > 1 else []
 
 
 def _open_questions_block(data: Dict[str, Any]) -> List[str]:

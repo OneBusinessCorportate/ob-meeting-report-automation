@@ -558,6 +558,61 @@ class SupabaseRepo:
             log.warning("Could not load previous meeting tasks: %s", exc)
             return None
 
+    def get_prior_meeting_stats(self, before, *, limit: int = 5) -> List[Dict[str, Any]]:
+        """Per-meeting stats for the analytics block, oldest first.
+
+        For up to ``limit`` analyzed meetings held strictly before ``before``:
+        the meeting date, the effectiveness score and the completion of THAT
+        meeting's «задачи с прошлой планёрки» (from previous_tasks_status), so
+        the report can show the completion-rate trend over time. Best-effort:
+        returns an empty list and never raises.
+        """
+        try:
+            before_iso = before.isoformat() if hasattr(before, "isoformat") else str(before)
+            meetings = (
+                self.client.table("mtg_meetings")
+                .select("id, actual_start")
+                .lt("actual_start", before_iso)
+                .order("actual_start", desc=True)
+                .limit(limit)
+                .execute()
+            ).data or []
+            stats: List[Dict[str, Any]] = []
+            for meeting in meetings:
+                rows = (
+                    self.client.table("mtg_analyses")
+                    .select("ai_metadata")
+                    .eq("meeting_id", meeting["id"])
+                    .eq("is_current", True)
+                    .eq("status", "completed")
+                    .limit(1)
+                    .execute()
+                ).data
+                if not rows:
+                    continue
+                extras = ((rows[0].get("ai_metadata") or {}).get("report_extras") or {})
+                statuses = [
+                    s for s in extras.get("previous_tasks_status") or []
+                    if isinstance(s, dict) and (s.get("task") or "").strip()
+                ]
+                done = sum(
+                    1 for s in statuses
+                    if (s.get("status") or "").strip().lower() == "выполнено"
+                )
+                stats.append(
+                    {
+                        "date": (meeting.get("actual_start") or "")[:10],
+                        "score": (extras.get("effectiveness") or {}).get("score"),
+                        "tasks_done": done,
+                        "tasks_total": len(statuses),
+                    }
+                )
+            stats.reverse()  # oldest first, so trends read left to right
+            return stats
+        except Exception as exc:  # analytics are best-effort
+            log.warning("Could not load prior meeting stats: %s", exc)
+            return []
+
     # --- Daily send log (idempotency across cron re-runs) ----------------------
     def claim_daily_send(self, on_date: date, kind: str) -> bool:
         """Atomically claim today's one-send slot for ``kind``.

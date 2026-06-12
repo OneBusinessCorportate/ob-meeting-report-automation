@@ -186,6 +186,7 @@ def _analyze_meeting_inner(
             meeting_date=meeting_date,
             time_range=meeting_time_range(meeting, ai.config.timezone_offset_hours),
             team_roster=team_roster,
+            prior_stats=repo.get_prior_meeting_stats(before) if before else [],
         )
     except Exception as exc:  # rendering must never lose a completed analysis
         log.exception("Telegram report rendering failed; using model text: %s", exc)

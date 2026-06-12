@@ -74,11 +74,14 @@ def _render_with_current_template(
 
         meeting = report.get("_meeting") or {}
         meeting_date = (meeting.get("actual_start") or "")[:10] or None
+        actual_start = meeting.get("actual_start")
+        prior_stats = repo.get_prior_meeting_stats(actual_start) if actual_start else []
         return render_telegram_report(
             data,
             meeting_date=meeting_date,
             time_range=meeting_time_range(meeting, config.timezone_offset_hours),
             team_roster=team_roster,
+            prior_stats=prior_stats,
         )
     except Exception as exc:
         log.exception("Re-rendering stored report failed; using stored text: %s", exc)

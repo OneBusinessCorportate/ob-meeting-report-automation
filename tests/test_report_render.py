@@ -199,8 +199,9 @@ def test_tasks_grouped_by_assignee():
     assert "👤 Оля:\n1. Подготовить договор с Бета. Срок: 2026-06-15" in block
 
 
-def test_previous_tasks_dynamics_with_completion_rate():
+def test_analytics_block_with_completion_rates_and_trends():
     data = {
+        "effectiveness": {"score": 7, "criteria": []},
         "previous_tasks_status": [
             {"task": "Отправить платежное поручение.", "assignee": "Оля Бухгалтер",
              "status": "выполнено", "evidence": "сказала, что отправила"},
@@ -210,23 +211,37 @@ def test_previous_tasks_dynamics_with_completion_rate():
              "status": "частично", "evidence": ""},
             {"task": "Подготовить список клиентов с оборотом 200 млн.",
              "assignee": "Наира Мхитарян", "status": "не упоминалось", "evidence": ""},
-        ]
+        ],
+        "open_questions": ["Вопрос?"],
     }
+    prior_stats = [
+        {"date": "2026-06-10", "score": 5, "tasks_done": 1, "tasks_total": 4},
+        {"date": "2026-06-11", "score": 6, "tasks_done": 0, "tasks_total": 3},
+    ]
     roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
-    text = render_telegram_report(data, meeting_date="2026-06-12", team_roster=roster)
-    assert "📈 ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ" in text
-    # Completion rate is computed by script, names normalized to first names.
+    text = render_telegram_report(
+        data, meeting_date="2026-06-12", team_roster=roster, prior_stats=prior_stats
+    )
+    assert "📈 АНАЛИТИКА" in text
+    # Analytics close the report (after the open questions).
+    assert text.index("📈 АНАЛИТИКА") > text.index("❓ ОТКРЫТЫЕ ВОПРОСЫ")
+    # Team and per-accountant completion rates are computed by script.
+    assert "Задачи с прошлой планёрки: выполнено 1 из 4 (25%)" in text
     assert "👤 Оля: выполнено 1 из 3 (33%)" in text
     assert "  ✅ Отправить платежное поручение. — сказала, что отправила" in text
     assert "  ❌ Заключить договор с Бета." in text
     assert "  🟡 Проверить банковские коды." in text
     assert "👤 Наира: выполнено 0 из 1 (0%)" in text
     assert "  ❓ Подготовить список клиентов с оборотом 200 млн." in text
+    # Completion trend across stand-ups, today compared with the last one.
+    assert "Динамика выполнения задач:\n  10.06: 25%\n  11.06: 0%\n  сегодня: 25% ↗️" in text
+    # Score trend against the previous stand-up.
+    assert "Оценка встречи: 6 → 7 из 10 ↗️" in text
 
 
-def test_previous_tasks_block_skipped_without_data():
-    text = _render()  # FULL_DATA has no previous_tasks_status
-    assert "ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ" not in text
+def test_analytics_block_skipped_without_data():
+    text = _render()  # FULL_DATA has no previous_tasks_status / prior stats
+    assert "АНАЛИТИКА" not in text
 
 
 def test_open_questions_present_and_noise_absent():
