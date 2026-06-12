@@ -683,6 +683,21 @@ def test_analyze_meeting_no_transcript_saves_failed():
     assert "transcript_not_found" in result["analysis"]["error_message"]
 
 
+def test_transcript_corrections_fix_known_asr_mistakes():
+    """«Արցախում» (Artsakh) is a confirmed ASR mishear of «արձակուրդում» (vacation)."""
+    from meeting_pipeline.analyze import apply_transcript_corrections
+
+    fixed = apply_transcript_corrections("Էմ հիշացնում եմ, որ ես վաղը Արցախում եմ։")
+    assert "Արցախ" not in fixed
+    assert "արձակուրդում" in fixed
+    # Env-provided corrections extend the built-in map.
+    config = Config(transcript_corrections_raw="ԴԳ Ֆինանս=>DG Finance")
+    fixed = apply_transcript_corrections(
+        "ԴԳ Ֆինանս և Արցախ", config.transcript_corrections
+    )
+    assert fixed == "DG Finance և արձակուրդ"
+
+
 def test_deliver_today_sends_report():
     from datetime import date
 

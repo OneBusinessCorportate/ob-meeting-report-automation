@@ -19,6 +19,27 @@ from .utils import get_logger, parse_date
 log = get_logger("meeting_pipeline.analyze")
 
 
+# Known speech-to-text mistakes in the Timeless transcripts, applied to the
+# transcript text before analysis. Confirmed by leadership on the 2026-03-24
+# meeting: Эмилия says «արձակուրդում եմ» (I am on vacation), but the ASR wrote
+# «Արցախում եմ» (I am in Artsakh). Longer keys are replaced first. Extendable
+# via MEETING_TRANSCRIPT_CORRECTIONS="wrong=>right,wrong2=>right2".
+TRANSCRIPT_CORRECTIONS = {
+    "Արցախում": "արձակուրդում",
+    "Արցախ": "արձակուրդ",
+}
+
+
+def apply_transcript_corrections(
+    text: str, extra: Optional[Dict[str, str]] = None
+) -> str:
+    """Fix known ASR mis-transcriptions before the text reaches the AI."""
+    corrections = {**TRANSCRIPT_CORRECTIONS, **(extra or {})}
+    for wrong in sorted(corrections, key=len, reverse=True):
+        text = text.replace(wrong, corrections[wrong])
+    return text
+
+
 def extract_full_transcript(meeting: Dict[str, Any]) -> Optional[str]:
     """Pull the full transcript text out of an L1 meeting's ``raw_transcript``.
 
@@ -84,6 +105,10 @@ def _analyze_meeting_inner(
     meeting: Dict[str, Any],
 ) -> Dict[str, Any]:
     transcript = extract_full_transcript(meeting)
+    if transcript:
+        transcript = apply_transcript_corrections(
+            transcript, getattr(ai.config, "transcript_corrections", None)
+        )
     meeting_date = (meeting.get("actual_start") or "")[:10] or None
 
     if not transcript:

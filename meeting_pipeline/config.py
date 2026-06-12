@@ -149,6 +149,12 @@ class Config:
     meeting_team_roster_raw: Optional[str] = field(
         default_factory=lambda: _get("MEETING_TEAM_ROSTER")
     )
+    # Extra ASR fixes applied to transcripts before analysis, on top of the
+    # built-in ones (see analyze.TRANSCRIPT_CORRECTIONS). Format:
+    #   MEETING_TRANSCRIPT_CORRECTIONS="неправильно=>правильно,wrong2=>right2"
+    transcript_corrections_raw: Optional[str] = field(
+        default_factory=lambda: _get("MEETING_TRANSCRIPT_CORRECTIONS")
+    )
 
     # --- Interview / onboarding transcription (task II) ---
     # Supabase table that stores interview calls + full transcript + status.
@@ -242,6 +248,19 @@ class Config:
             if name:
                 roster.append({"name": name, "role": role.strip()})
         return roster
+
+    @property
+    def transcript_corrections(self) -> dict:
+        """Parse ``MEETING_TRANSCRIPT_CORRECTIONS`` into ``{wrong: right}``."""
+        raw = self.transcript_corrections_raw
+        if not raw:
+            return {}
+        corrections = {}
+        for chunk in raw.replace("\n", ",").split(","):
+            wrong, sep, right = chunk.partition("=>")
+            if sep and wrong.strip():
+                corrections[wrong.strip()] = right.strip()
+        return corrections
 
     # --- Validation helpers ---------------------------------------------------
     @property
