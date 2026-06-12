@@ -62,8 +62,10 @@ FULL_DATA = {
     ],
     "problems_risks": [
         {"text": "Два клиента не платят дольше пяти месяцев.", "severity": "high",
+         "decision": "Эмилия уточнит ситуацию и решит, работаем ли дальше. В Задачи добавили.",
          "owner": "Оля", "deadline": "Не указано", "how_to_track": "Список задолженностей"},
         {"text": "Документы от клиента Гамма задерживаются.", "severity": "low",
+         "decision": "Не указано",
          "owner": "Не указано", "deadline": "Не указано", "how_to_track": "Не указано"},
     ],
     "action_items": [
@@ -90,24 +92,29 @@ def test_header_and_score_block():
     text = _render()
     lines = text.splitlines()
     assert lines[0] == "📋 Планёрка бухгалтерии"
-    assert lines[1] == "📅 2026-06-10, 09:30–10:00"
-    assert "📊 ОЦЕНКА ВСТРЕЧИ: 7 из 10" in text
+    assert lines[1] == "2026-06-10, 09:30–10:00"  # no 📅 emoji
+    # Score line without the 📊 emoji and without a verdict sentence;
+    # the checklist follows directly — no «Что было на встрече:» label.
+    assert "ОЦЕНКА ВСТРЕЧИ: 7 из 10" in text
+    assert "📊" not in text
+    assert "Рабочая встреча, но без похвалы." not in text
+    assert "Что было на встрече" not in text
     # Checklist says «Руководитель», partial = yellow circle, 6 items incl. followup.
     assert "  🟡 Все высказались" in text
     assert "  ✅ Руководитель задавала вопросы" in text
     assert "  ❌ Руководитель кого-то похвалила" in text
     assert "  ❌ Руководитель спросила про прошлые задачи" in text
     assert "Эмилия задавала" not in text
-    # Talk share is compact and on top (before "Кто был").
-    assert "Кто сколько говорил: 70% руководитель, 30% бухгалтеры" in text
-    assert text.index("Кто сколько говорил") < text.index("Кто был")
+    # Talk share is compact, separated by a blank line above, before the people.
+    assert "\n\nКто сколько говорил: 70% руководитель, 30% бухгалтеры" in text
+    assert text.index("Кто сколько говорил") < text.index("👤")
 
 
-def test_attendance_block_with_visible_absent():
+def test_attendance_lines_dropped_late_start_kept():
     text = _render()
-    assert "Кто был: Эмилия (руководитель), Стелла, Оля" in text
-    # Blank line right above «Не было» so the block stands out.
-    assert "\n\nНе было: Тагуи" in text
+    # «Кто был» / «Не было» dropped: per-person blocks already show attendance.
+    assert "Кто был" not in text
+    assert "Не было" not in text
     assert "🕐 Опоздание: 5 мин" in text
 
 
@@ -124,8 +131,8 @@ def test_accountant_blocks_cross_and_dash_semantics():
     assert "  – Регистрация зарплат по клиенту Альфа" in olya
     assert "Блокеры: Список задолженностей не обновляется" in olya
     assert "Нужна помощь" not in olya  # optional line omitted when empty
-    # Тагуи did not participate — and non-participants are listed FIRST.
-    assert "👤 Тагуи\nНе принимал(а) участия." in text
+    # Тагуи did not participate: a single line, listed FIRST.
+    assert "👤 Тагуи - не принимал(а) участия." in text
     assert text.index("👤 Тагуи") < text.index("👤 Стелла") < text.index("👤 Оля")
     # The manager has no personal accountant block.
     assert "👤 Эмилия\n" not in text
@@ -143,20 +150,25 @@ def test_manager_block_grouped_numbered_no_poruchila():
     assert "Кто сколько говорил" not in block
 
 
-def test_risks_numbered_with_icon_no_severity_words():
+def test_risks_icon_before_number_with_decision_line():
     text = _render()
     block = text.split("⚠️ РИСКИ И СИТУАЦИИ")[1].split("✅ ЗАДАЧИ")[0]
-    assert "1. Два клиента не платят дольше пяти месяцев." in block
-    assert "Риск: 🔴" in block
-    assert "Ответственный: Оля" in block
-    assert "Срок: ❌" in block
-    assert "2. Документы от клиента Гамма задерживаются." in block
-    assert "Риск: 🟢" in block
-    assert "Ответственный: ❌" in block
+    # Severity icon goes BEFORE the number; no «Риск:» line.
+    assert "🔴 1. Два клиента не платят дольше пяти месяцев." in block
+    assert "🟢 2. Документы от клиента Гамма задерживаются." in block
+    assert "Риск:" not in block
+    # «Что решили» follows each situation; ❌ when no next step was discussed.
+    assert ("Что решили: Эмилия уточнит ситуацию и решит, работаем ли дальше. "
+            "В Задачи добавили.") in block
+    assert "Что решили: ❌" in block
+    # Ответственный/Срок/Как контролируем are no longer shown here.
+    assert "Ответственный" not in block
+    assert "Срок" not in block
+    assert "Как контролируем" not in block
     assert "Ситуация" not in block
     assert "высокая" not in block and "Степень риска" not in block
     # Situations are separated by a blank line.
-    assert "\n\n2. Документы" in block
+    assert "\n\n🟢 2. Документы" in block
 
 
 def test_tasks_grouped_by_assignee():
@@ -193,23 +205,17 @@ def test_sections_without_data_are_dropped():
 
 def test_renders_without_roster():
     text = render_telegram_report(FULL_DATA, meeting_date="2026-06-10")
-    assert "Кто был: Эмилия (руководитель), Стелла, Оля" in text
-    assert "Не было: Тагуи" in text
+    assert "👤 Тагуи - не принимал(а) участия." in text
+    assert "👤 Стелла" in text and "👤 Оля" in text
 
 
-def test_full_names_normalized_collectives_and_clients_kept():
+def test_full_names_normalized_collectives_kept():
     """Model output from real runs uses full names — the report shows first names.
 
-    Collective assignees («Все бухгалтеры») and client names («Гюльчоре
-    Балаян») must not be clipped to their first word.
+    Collective assignees («Все бухгалтеры») must not be clipped to their
+    first word.
     """
     data = {
-        "problems_risks": [
-            {"text": "Долг по DG Finance.", "severity": "high",
-             "owner": "Эмилия Аванесян", "deadline": "не указан"},
-            {"text": "Клиент Гюльчоре Балаян отказывается платить.", "severity": "high",
-             "owner": "Гюльчоре Балаян", "deadline": "Не указано"},
-        ],
         "action_items": [
             {"text": "Наире подготовить информацию о клиентах с оборотом более 200 млн",
              "assignee": "Наира Мхитарян", "deadline": "не указан"},
@@ -224,8 +230,6 @@ def test_full_names_normalized_collectives_and_clients_kept():
     }
     roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
     text = render_telegram_report(data, meeting_date="2026-03-24", team_roster=roster)
-    assert "Ответственный: Эмилия\n" in text
-    assert "Ответственный: Гюльчоре Балаян" in text  # client name kept whole
     assert "👤 Наира:" in text and "Наира Мхитарян:" not in text
     assert "👤 Все бухгалтеры:\n1. Проверить свои банковские коды. Срок: 2026-03-24" in text
     assert "👤 Тагуи:\n1. Разобраться с делами Алекса. Срок: ❌" in text

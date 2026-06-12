@@ -763,8 +763,8 @@ def test_deliver_rerenders_stored_report_with_current_template():
     # Current template, not the stored legacy text.
     assert "Степень риска" not in text and "Ситуация 1" not in text
     assert "🟡 Все высказались" in text
-    assert "Риск: 🔴" in text
-    assert "Ответственный: Эмилия" in text
+    assert "🔴 1. Долг клиента." in text
+    assert "Что решили: ❌" in text  # legacy analysis has no decision field
     assert "👤 Стелла" in text and "План на сегодня: ❌" in text and "Блокеры: –" in text
 
 
