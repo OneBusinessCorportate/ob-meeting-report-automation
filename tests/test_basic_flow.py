@@ -1076,6 +1076,18 @@ def test_deliver_report_not_resent_on_rerun():
     assert second["delivered"] is True
     assert len(session.calls) == 1  # still only the original send
 
+    # A deliberate manual re-send works with force=True.
+    third = deliver_today(
+        config, date_str="2026-03-26", force=True, repo=repo, telegram=telegram
+    )
+    assert third["status"] == "delivered"
+    assert len(session.calls) == 2
+
+    # The forced send does not unlock automatic re-sends afterwards.
+    fourth = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert fourth["status"] == "already_delivered"
+    assert len(session.calls) == 2
+
 
 def test_deliver_new_analysis_version_still_goes_out_same_day():
     """A forced re-analysis (new version) may be delivered the same day."""

@@ -24,10 +24,15 @@ log = get_logger("scripts.deliver")
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deliver an L2 report to Telegram.")
     parser.add_argument("--date", help="Date (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-send even if this report was already delivered to the chat.",
+    )
     args = parser.parse_args()
 
     config = load_config()
-    result = deliver_today(config, date_str=args.date)
+    result = deliver_today(config, date_str=args.date, force=args.force)
 
     log.info(
         "Deliver result: status=%s delivered=%s",

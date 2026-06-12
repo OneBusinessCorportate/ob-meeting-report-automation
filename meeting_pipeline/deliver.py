@@ -89,10 +89,15 @@ def deliver_today(
     config: Config,
     *,
     date_str: Optional[str] = None,
+    force: bool = False,
     repo: Optional[SupabaseRepo] = None,
     telegram: Optional[TelegramClient] = None,
 ) -> Dict[str, Any]:
-    """Deliver today's current L2 report to Telegram."""
+    """Deliver today's current L2 report to Telegram.
+
+    Automatic runs (the cron) send each report at most once; ``force=True``
+    (CLI: ``--force``) re-sends deliberately from a manual trigger.
+    """
     repo = repo or SupabaseRepo(config)
     telegram = telegram or TelegramClient(config)
     on_date: date = parse_date(date_str, config.timezone_offset_hours)
@@ -133,11 +138,13 @@ def deliver_today(
 
     delivery = (report.get("ai_metadata") or {}).get("delivery") or {}
     report_send_kind = f"report:{report['id']}"
-    if delivery.get("delivered") or not repo.claim_daily_send(
+    already_sent = delivery.get("delivered") or not repo.claim_daily_send(
         on_date, report_send_kind
-    ):
+    )
+    if already_sent and not force:
         log.info(
-            "Report %s was already delivered today — not sending again.",
+            "Report %s was already delivered today — not sending again "
+            "(use --force to re-send).",
             report["id"],
         )
         return {
@@ -147,6 +154,8 @@ def deliver_today(
             "analysis_id": report["id"],
             "telegram": None,
         }
+    if already_sent:
+        log.info("Re-sending already-delivered report %s (--force).", report["id"])
 
     md = _render_with_current_template(config, repo, report)
     if md:
