@@ -128,7 +128,11 @@ def main() -> int:
     log.info("=== DAILY RUN SUMMARY ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
-    delivered = summary.get("deliver", {}).get("delivered", True)
+    deliver_summary = summary.get("deliver", {})
+    delivered = deliver_summary.get("delivered", True)
+    # A repeat run on the same day sends nothing on purpose — that's success.
+    if deliver_summary.get("status") in ("already_delivered", "notice_already_sent"):
+        delivered = True
     return 0 if delivered else 1
 
 

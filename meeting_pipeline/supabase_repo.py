@@ -509,6 +509,45 @@ class SupabaseRepo:
             log.warning("Could not load prior meeting context: %s", exc)
             return []
 
+    # --- Daily send log (idempotency across cron re-runs) ----------------------
+    def claim_daily_send(self, on_date: date, kind: str) -> bool:
+        """Atomically claim today's one-send slot for ``kind``.
+
+        Returns True when this run claimed the slot (caller should send) and
+        False when an earlier run already did — so however often the cron
+        fires, each Telegram notification goes out at most once per day.
+        Fail-open: a missing table or a transient DB error must not silence
+        the report entirely.
+        """
+        payload = {"report_date": on_date.isoformat(), "kind": kind}
+        try:
+            result = (
+                self.client.table("mtg_delivery_log")
+                .upsert(
+                    payload,
+                    on_conflict="report_date,kind",
+                    ignore_duplicates=True,
+                )
+                .execute()
+            )
+            return bool(result.data)
+        except Exception as exc:
+            log.warning("Could not claim daily send slot (%s): %s", kind, exc)
+            return True
+
+    def release_daily_send(self, on_date: date, kind: str) -> None:
+        """Release a claimed slot after a failed send so a later run retries."""
+        try:
+            (
+                self.client.table("mtg_delivery_log")
+                .delete()
+                .eq("report_date", on_date.isoformat())
+                .eq("kind", kind)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("Could not release daily send slot (%s): %s", kind, exc)
+
     def mark_delivery_status(
         self,
         analysis_id: str,

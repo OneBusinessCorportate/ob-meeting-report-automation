@@ -30,6 +30,11 @@ MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не на�
 # being mis-parsed as Markdown.
 MISSING_REPORT_MENTIONS = "@saakyans_21 @emilyaavanesyan"
 
+# mtg_delivery_log kinds: one (date, kind) row per Telegram send. The cron may
+# fire many times a day (manual re-runs, a mis-set schedule on Render), but
+# each message must reach the chat at most once per day.
+NOTICE_SEND_KIND = "missing_report_notice"
+
 # Analysis-row columns that feed the template alongside ai_metadata.report_extras.
 _RENDER_COLUMNS = (
     "action_items",
@@ -95,6 +100,18 @@ def deliver_today(
     report = repo.get_today_current_report(on_date)
 
     if not report or not (report.get("telegram_report_md") or "").strip():
+        if not repo.claim_daily_send(on_date, NOTICE_SEND_KIND):
+            log.info(
+                "Missing-report notice for %s was already sent today — "
+                "not sending again.",
+                on_date,
+            )
+            return {
+                "ok": False,
+                "delivered": False,
+                "status": "notice_already_sent",
+                "telegram": None,
+            }
         log.warning("No current L2 report for %s — sending notification.", on_date)
         notice = (
             f"{MISSING_REPORT_MESSAGE}\n\n"
@@ -104,11 +121,31 @@ def deliver_today(
         # Plain text (no Markdown) so the "_" in @saakyans_21 isn't treated as
         # italic markup; @mentions still notify the users.
         result = telegram.send_message(notice, parse_mode=None)
+        if not result.ok:
+            # Free the slot so the next run can retry the notice.
+            repo.release_daily_send(on_date, NOTICE_SEND_KIND)
         return {
             "ok": False,
             "delivered": result.ok,
             "status": "report_not_found",
             "telegram": result,
+        }
+
+    delivery = (report.get("ai_metadata") or {}).get("delivery") or {}
+    report_send_kind = f"report:{report['id']}"
+    if delivery.get("delivered") or not repo.claim_daily_send(
+        on_date, report_send_kind
+    ):
+        log.info(
+            "Report %s was already delivered today — not sending again.",
+            report["id"],
+        )
+        return {
+            "ok": True,
+            "delivered": True,
+            "status": "already_delivered",
+            "analysis_id": report["id"],
+            "telegram": None,
         }
 
     md = _render_with_current_template(config, repo, report)
@@ -117,6 +154,9 @@ def deliver_today(
     else:
         md = report["telegram_report_md"]
     result = telegram.send_message(md, parse_mode="Markdown")
+    if not result.ok:
+        # Free the slot so the next run can retry the delivery.
+        repo.release_daily_send(on_date, report_send_kind)
 
     detail = (
         f"delivered {result.parts_sent} part(s)" if result.ok else result.error

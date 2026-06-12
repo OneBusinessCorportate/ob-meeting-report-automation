@@ -34,15 +34,20 @@ class FakeTable:
         self._payload = payload
         return self
 
-    def upsert(self, payload, on_conflict=None):
+    def upsert(self, payload, on_conflict=None, ignore_duplicates=False):
         self._op = "upsert"
         self._payload = payload
         self._on_conflict = on_conflict
+        self._ignore_duplicates = ignore_duplicates
         return self
 
     def update(self, payload):
         self._op = "update"
         self._payload = payload
+        return self
+
+    def delete(self):
+        self._op = "delete"
         return self
 
     def eq(self, col, value):
@@ -90,6 +95,8 @@ class FakeTable:
                         None,
                     )
                     if existing:
+                        if getattr(self, "_ignore_duplicates", False):
+                            continue  # PostgREST returns no row for ignored dupes
                         existing.update(row)
                         inserted.append(copy.deepcopy(existing))
                         continue
@@ -97,6 +104,11 @@ class FakeTable:
                 self._rows.append(row)
                 inserted.append(copy.deepcopy(row))
             return _Result(inserted)
+
+        if self._op == "delete":
+            deleted = [copy.deepcopy(r) for r in self._rows if self._match(r)]
+            self._rows[:] = [r for r in self._rows if not self._match(r)]
+            return _Result(deleted)
 
         if self._op == "update":
             updated = []

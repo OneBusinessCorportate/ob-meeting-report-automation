@@ -76,15 +76,20 @@ class FakeTable:
         self._payload = payload
         return self
 
-    def upsert(self, payload, on_conflict=None):
+    def upsert(self, payload, on_conflict=None, ignore_duplicates=False):
         self._op = "upsert"
         self._payload = payload
         self._on_conflict = on_conflict
+        self._ignore_duplicates = ignore_duplicates
         return self
 
     def update(self, payload):
         self._op = "update"
         self._payload = payload
+        return self
+
+    def delete(self):
+        self._op = "delete"
         return self
 
     def eq(self, col, value):
@@ -137,6 +142,8 @@ class FakeTable:
                         None,
                     )
                     if existing:
+                        if getattr(self, "_ignore_duplicates", False):
+                            continue  # PostgREST returns no row for ignored dupes
                         existing.update(row)
                         inserted.append(copy.deepcopy(existing))
                         continue
@@ -144,6 +151,11 @@ class FakeTable:
                 self._rows.append(row)
                 inserted.append(copy.deepcopy(row))
             return _Result(inserted)
+
+        if self._op == "delete":
+            deleted = [copy.deepcopy(r) for r in self._rows if self._match(r)]
+            self._rows[:] = [r for r in self._rows if not self._match(r)]
+            return _Result(deleted)
 
         if self._op == "update":
             updated = []
@@ -991,6 +1003,117 @@ def test_deliver_today_missing_report_notifies():
     assert "@saakyans_21" in text and "@emilyaavanesyan" in text
     # Sent as plain text so the "_" in the username isn't parsed as Markdown.
     assert session.calls[0].get("parse_mode") is None
+
+
+def test_deliver_missing_report_notice_sent_once_per_day():
+    """Re-runs the same day must NOT spam the chat with repeat notices."""
+    config = _config()
+    repo = _repo()
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+
+    first = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    assert first["status"] == "report_not_found"
+    assert len(session.calls) == 1
+
+    # Cron fires again (e.g. every 15 minutes): nothing is sent again.
+    second = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    assert second["status"] == "notice_already_sent"
+    assert len(session.calls) == 1
+
+    # A new day gets its own notice.
+    third = deliver_today(config, date_str="2026-06-13", repo=repo, telegram=telegram)
+    assert third["status"] == "report_not_found"
+    assert len(session.calls) == 2
+
+
+def test_deliver_missing_report_notice_retried_after_failed_send():
+    """A failed Telegram send releases the daily slot so the next run retries."""
+    config = _config()
+    config.telegram_max_retries = 1
+    repo = _repo()
+
+    broken = FlakyTelegramSession(fail_times=99, mode="raise")
+    telegram = TelegramClient(config, session=broken, sleep=lambda s: None)
+    first = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    assert first["delivered"] is False
+
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    second = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    assert second["status"] == "report_not_found"
+    assert second["delivered"] is True
+    assert len(session.calls) == 1
+
+
+def test_deliver_report_not_resent_on_rerun():
+    """A delivered report must not be re-sent when the cron fires again."""
+    config = _config()
+    repo = _repo()
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_2026_03_26",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-03-26T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="📋 **Планёрка**\nГотово.",
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+
+    first = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert first["status"] == "delivered"
+    assert len(session.calls) == 1
+
+    second = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert second["status"] == "already_delivered"
+    assert second["delivered"] is True
+    assert len(session.calls) == 1  # still only the original send
+
+
+def test_deliver_new_analysis_version_still_goes_out_same_day():
+    """A forced re-analysis (new version) may be delivered the same day."""
+    config = _config()
+    repo = _repo()
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_2026_03_26",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-03-26T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="📋 v1",
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert len(session.calls) == 1
+
+    # Supersede with a corrected version (the fake has no DB trigger, so
+    # demote the old row by hand) — the new analysis id gets its own slot.
+    for row in repo.client.store["mtg_analyses"]:
+        row["is_current"] = False
+        row["status"] = "superseded"
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="📋 v2 (исправленный)",
+    )
+    result = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
+    assert result["status"] == "delivered"
+    assert len(session.calls) == 2
+    assert "v2" in session.calls[1]["text"]
 
 
 def _gemini_config():
