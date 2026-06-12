@@ -253,10 +253,18 @@ def _accountant_blocks(
     team_roster: Optional[List[Dict[str, Any]]],
     manager: str,
 ) -> List[str]:
+    roster_firsts = _roster_firsts(team_roster)
     entries = [
         e for e in data.get("participant_breakdown") or []
         if _first_name(e.get("name")) and _first_name(e.get("name")).lower() != manager.lower()
     ]
+    if roster_firsts:
+        # The roster is the source of truth for the stand-up: people who are
+        # no longer part of it (e.g. Гор-менеджер in analyses stored before
+        # the roster was cleaned up) are not shown.
+        entries = [
+            e for e in entries if _first_name(e.get("name")).lower() in roster_firsts
+        ]
     if not entries:
         return []
 
@@ -570,15 +578,22 @@ def _analytics_block(
     ]
     total_meetings = len(attendance) + (1 if today_breakdown else 0)
     if total_meetings >= 2:
+        def _counts_for_roster(name: str) -> bool:
+            # Only people from the current roster: ex-members of analyses
+            # stored with an older roster must not pollute the stats.
+            return not roster_firsts or name.split()[0].lower() in roster_firsts
+
         misses: Dict[str, int] = {}
         for entry in attendance:
             for raw in entry.get("absent") or []:
                 name = _person(raw, roster_firsts)
-                misses[name] = misses.get(name, 0) + 1
+                if _counts_for_roster(name):
+                    misses[name] = misses.get(name, 0) + 1
         for participant in today_breakdown:
             if not participant.get("participated"):
                 name = _person(participant.get("name"), roster_firsts)
-                misses[name] = misses.get(name, 0) + 1
+                if _counts_for_roster(name):
+                    misses[name] = misses.get(name, 0) + 1
         if misses:
             out.append(f"Пропуски за последние {total_meetings} планёрки(ок):")
             for name, count in sorted(misses.items(), key=lambda kv: -kv[1]):

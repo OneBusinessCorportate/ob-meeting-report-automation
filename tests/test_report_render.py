@@ -223,7 +223,11 @@ def test_analytics_block_with_completion_rates_and_trends():
                           "Наира Мхитарян": {"done": 0, "total": 2}},
          "has_participation": True, "absent": ["Аваг"], "manager_pct": 75},
     ]
-    roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
+    roster = ROSTER + [
+        {"name": "Наира Мхитарян", "role": "бухгалтер"},
+        {"name": "Аваг", "role": "бухгалтер"},
+        {"name": "Артак", "role": "бухгалтер"},
+    ]
     data["talk_share"] = {"manager_pct": 70, "accountants_pct": 30}
     data["participant_breakdown"] = [
         {"name": "Аваг", "participated": False},
@@ -303,6 +307,20 @@ def test_renders_without_roster():
     text = render_telegram_report(FULL_DATA, meeting_date="2026-06-10")
     assert "👤 Тагуи - не принимал(а) участия." in text
     assert "👤 Стелла" in text and "👤 Оля" in text
+
+
+def test_ex_roster_members_hidden_when_roster_known():
+    """Old stored analyses may contain people removed from the roster (Гор)."""
+    data = {
+        "participant_breakdown": [
+            {"name": "Гор Менеджер", "participated": False},
+            {"name": "Стелла Бухгалтер", "participated": True,
+             "yesterday": "Сдала отчёт.", "today_plan": [], "blockers": []},
+        ]
+    }
+    text = render_telegram_report(data, meeting_date="2026-03-24", team_roster=ROSTER)
+    assert "Гор" not in text
+    assert "👤 Стелла" in text
 
 
 def test_full_names_normalized_collectives_kept():
