@@ -562,10 +562,11 @@ class SupabaseRepo:
         """Per-meeting stats for the analytics block, oldest first.
 
         For up to ``limit`` analyzed meetings held strictly before ``before``:
-        the meeting date, the effectiveness score and the completion of THAT
-        meeting's «задачи с прошлой планёрки» (from previous_tasks_status), so
-        the report can show the completion-rate trend over time. Best-effort:
-        returns an empty list and never raises.
+        the meeting date, the effectiveness score, the completion of THAT
+        meeting's «задачи с прошлой планёрки» (team total and per assignee),
+        who was absent and the manager's talk share — so the report can show
+        trends over time (completion rate, attendance, talk balance, score).
+        Best-effort: returns an empty list and never raises.
         """
         try:
             before_iso = before.isoformat() if hasattr(before, "isoformat") else str(before)
@@ -595,16 +596,31 @@ class SupabaseRepo:
                     s for s in extras.get("previous_tasks_status") or []
                     if isinstance(s, dict) and (s.get("task") or "").strip()
                 ]
-                done = sum(
-                    1 for s in statuses
-                    if (s.get("status") or "").strip().lower() == "выполнено"
-                )
+                done = 0
+                per_assignee: Dict[str, Dict[str, int]] = {}
+                for status in statuses:
+                    assignee = (status.get("assignee") or "Не указано").strip()
+                    bucket = per_assignee.setdefault(assignee, {"done": 0, "total": 0})
+                    bucket["total"] += 1
+                    if (status.get("status") or "").strip().lower() == "выполнено":
+                        bucket["done"] += 1
+                        done += 1
+                breakdown = [
+                    p for p in extras.get("participant_breakdown") or []
+                    if isinstance(p, dict) and (p.get("name") or "").strip()
+                ]
                 stats.append(
                     {
                         "date": (meeting.get("actual_start") or "")[:10],
                         "score": (extras.get("effectiveness") or {}).get("score"),
                         "tasks_done": done,
                         "tasks_total": len(statuses),
+                        "per_assignee": per_assignee,
+                        "has_participation": bool(breakdown),
+                        "absent": [
+                            p["name"] for p in breakdown if not p.get("participated")
+                        ],
+                        "manager_pct": (extras.get("talk_share") or {}).get("manager_pct"),
                     }
                 )
             stats.reverse()  # oldest first, so trends read left to right

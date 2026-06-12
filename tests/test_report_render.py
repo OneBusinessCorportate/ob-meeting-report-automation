@@ -215,10 +215,20 @@ def test_analytics_block_with_completion_rates_and_trends():
         "open_questions": ["Вопрос?"],
     }
     prior_stats = [
-        {"date": "2026-06-10", "score": 5, "tasks_done": 1, "tasks_total": 4},
-        {"date": "2026-06-11", "score": 6, "tasks_done": 0, "tasks_total": 3},
+        {"date": "2026-06-10", "score": 5, "tasks_done": 1, "tasks_total": 4,
+         "per_assignee": {"Оля": {"done": 0, "total": 2}},
+         "has_participation": True, "absent": ["Аваг", "Артак"], "manager_pct": 80},
+        {"date": "2026-06-11", "score": 6, "tasks_done": 0, "tasks_total": 3,
+         "per_assignee": {"Оля": {"done": 0, "total": 1},
+                          "Наира Мхитарян": {"done": 0, "total": 2}},
+         "has_participation": True, "absent": ["Аваг"], "manager_pct": 75},
     ]
     roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
+    data["talk_share"] = {"manager_pct": 70, "accountants_pct": 30}
+    data["participant_breakdown"] = [
+        {"name": "Аваг", "participated": False},
+        {"name": "Оля", "participated": True},
+    ]
     text = render_telegram_report(
         data, meeting_date="2026-06-12", team_roster=roster, prior_stats=prior_stats
     )
@@ -227,16 +237,28 @@ def test_analytics_block_with_completion_rates_and_trends():
     assert text.index("📈 АНАЛИТИКА") > text.index("❓ ОТКРЫТЫЕ ВОПРОСЫ")
     # Team and per-accountant completion rates are computed by script.
     assert "Задачи с прошлой планёрки: выполнено 1 из 4 (25%)" in text
-    assert "👤 Оля: выполнено 1 из 3 (33%)" in text
+    # Personal trend against the person's own previous result.
+    assert "👤 Оля: выполнено 1 из 3 (33%), прошлая планёрка 0% ↗️" in text
     assert "  ✅ Отправить платежное поручение. — сказала, что отправила" in text
     assert "  ❌ Заключить договор с Бета." in text
     assert "  🟡 Проверить банковские коды." in text
-    assert "👤 Наира: выполнено 0 из 1 (0%)" in text
+    assert "👤 Наира: выполнено 0 из 1 (0%), прошлая планёрка 0% ➡️" in text
     assert "  ❓ Подготовить список клиентов с оборотом 200 млн." in text
-    # Completion trend across stand-ups, today compared with the last one.
+    # Completion trend across stand-ups + the script-computed average.
     assert "Динамика выполнения задач:\n  10.06: 25%\n  11.06: 0%\n  сегодня: 25% ↗️" in text
-    # Score trend against the previous stand-up.
-    assert "Оценка встречи: 6 → 7 из 10 ↗️" in text
+    assert "среднее за 3 планёрки(ок): 17%" in text
+    # Attendance: misses over the window (2 prior + today).
+    assert "Пропуски за последние 3 планёрки(ок):" in text
+    assert "  Аваг: 3 из 3" in text
+    assert "  Артак: 1 из 3" in text
+    # Manager talk-share trend and score chain.
+    assert "Доля руководителя в разговоре: 75% → 70% ↘️" in text
+    assert "Оценка встречи: 5 → 6 → 7 из 10 ↗️" in text
+    # Script-detected signals.
+    assert "❗ СИГНАЛЫ" in text
+    assert "  – Наира: 0% выполнения вторую планёрку подряд." in text
+    assert "  – Задач с прошлой планёрки, про которые никто не вспомнил: 1." in text
+    assert "  – Аваг: не было ни на одной из последних 3 планёрок." in text
 
 
 def test_analytics_block_skipped_without_data():

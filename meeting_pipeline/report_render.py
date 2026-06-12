@@ -391,6 +391,19 @@ def _trend_arrow(current: float, previous: float) -> str:
     return " ➡️"
 
 
+def _assignee_history(
+    prior_stats: List[Dict[str, Any]], name: str, roster_firsts: set
+) -> List[Dict[str, int]]:
+    """Per-meeting done/total for one person across prior stand-ups (oldest first)."""
+    history = []
+    for entry in prior_stats:
+        for raw, bucket in (entry.get("per_assignee") or {}).items():
+            if _person(raw, roster_firsts) == name and (bucket or {}).get("total"):
+                history.append(bucket)
+                break
+    return history
+
+
 def _analytics_block(
     data: Dict[str, Any],
     prior_stats: Optional[List[Dict[str, Any]]],
@@ -399,20 +412,19 @@ def _analytics_block(
     """Аналитика в конце отчёта: динамика, которую видят бухгалтеры.
 
     Статусы задач определяет ИИ по расшифровке, но ВСЕ цифры (проценты,
-    тренды) считает этот скрипт — они не могут быть выдуманы.
+    тренды, посещаемость, сигналы) считает этот скрипт — они не могут быть
+    выдуманы.
     """
     statuses = [
         s for s in data.get("previous_tasks_status") or [] if _clean(s.get("task"))
     ]
     prior_stats = prior_stats or []
-    history = [
-        s for s in prior_stats
-        if s.get("tasks_total") and s.get("date")
-    ]
+    history = [s for s in prior_stats if s.get("tasks_total") and s.get("date")]
     if not statuses and not history:
         return []
 
     out = ["📈 АНАЛИТИКА"]
+    signals: List[str] = []
 
     today_pct: Optional[int] = None
     if statuses:
@@ -437,7 +449,16 @@ def _analytics_block(
             tasks = grouped[assignee]
             done = sum(1 for t in tasks if _clean(t.get("status")).lower() == "выполнено")
             pct = round(100 * done / len(tasks))
-            out.append(f"👤 {assignee}: выполнено {done} из {len(tasks)} ({pct}%)")
+            header = f"👤 {assignee}: выполнено {done} из {len(tasks)} ({pct}%)"
+            # Personal trend against this person's previous stand-up result.
+            person_history = _assignee_history(prior_stats, assignee, roster_firsts)
+            if person_history:
+                prev = person_history[-1]
+                prev_pct = round(100 * prev["done"] / prev["total"])
+                header += f", прошлая планёрка {prev_pct}%{_trend_arrow(pct, prev_pct)}"
+                if pct == 0 and prev_pct == 0:
+                    signals.append(f"{assignee}: 0% выполнения вторую планёрку подряд.")
+            out.append(header)
             for task in tasks:
                 icon = _PREV_TASK_ICONS.get(_clean(task.get("status")).lower(), "❓")
                 line = f"  {icon} {_clean(task.get('task'))}"
@@ -447,28 +468,77 @@ def _analytics_block(
                 out.append(line)
             out.append("")
 
+        unmentioned = sum(
+            1 for s in statuses if _clean(s.get("status")).lower() == "не упоминалось"
+        )
+        if unmentioned:
+            signals.append(
+                f"Задач с прошлой планёрки, про которые никто не вспомнил: {unmentioned}."
+            )
+
     # Completion-rate trend across the recent stand-ups (script-computed).
     if history and (today_pct is not None or len(history) >= 2):
         out.append("Динамика выполнения задач:")
-        last_pct: Optional[int] = None
-        for entry in history:
-            pct = round(100 * entry["tasks_done"] / entry["tasks_total"])
+        pcts = [round(100 * e["tasks_done"] / e["tasks_total"]) for e in history]
+        for entry, pct in zip(history, pcts):
             out.append(f"  {_dd_mm(entry['date'])}: {pct}%")
-            last_pct = pct
         if today_pct is not None:
-            arrow = _trend_arrow(today_pct, last_pct) if last_pct is not None else ""
-            out.append(f"  сегодня: {today_pct}%{arrow}")
+            out.append(f"  сегодня: {today_pct}%{_trend_arrow(today_pct, pcts[-1])}")
+            pcts.append(today_pct)
+        out.append(f"  среднее за {len(pcts)} планёрки(ок): {round(sum(pcts) / len(pcts))}%")
         out.append("")
 
-    # Meeting-score trend: today's score against the previous stand-up.
+    # Attendance over the recent stand-ups (+ today), misses only.
+    attendance = [e for e in prior_stats if e.get("has_participation")]
+    today_breakdown = [
+        p for p in data.get("participant_breakdown") or [] if _first_name(p.get("name"))
+    ]
+    total_meetings = len(attendance) + (1 if today_breakdown else 0)
+    if total_meetings >= 2:
+        misses: Dict[str, int] = {}
+        for entry in attendance:
+            for raw in entry.get("absent") or []:
+                name = _person(raw, roster_firsts)
+                misses[name] = misses.get(name, 0) + 1
+        for participant in today_breakdown:
+            if not participant.get("participated"):
+                name = _person(participant.get("name"), roster_firsts)
+                misses[name] = misses.get(name, 0) + 1
+        if misses:
+            out.append(f"Пропуски за последние {total_meetings} планёрки(ок):")
+            for name, count in sorted(misses.items(), key=lambda kv: -kv[1]):
+                out.append(f"  {name}: {count} из {total_meetings}")
+                if count == total_meetings:
+                    signals.append(
+                        f"{name}: не было ни на одной из последних "
+                        f"{total_meetings} планёрок."
+                    )
+            out.append("")
+
+    # Manager talk-share trend (how much of the meeting the manager speaks).
+    today_talk = (data.get("talk_share") or {}).get("manager_pct")
+    prior_talk = [e.get("manager_pct") for e in prior_stats if e.get("manager_pct")]
+    if today_talk and prior_talk:
+        out.append(
+            f"Доля руководителя в разговоре: {int(prior_talk[-1])}% → "
+            f"{int(today_talk)}%{_trend_arrow(float(today_talk), float(prior_talk[-1]))}"
+        )
+        out.append("")
+
+    # Meeting-score trend: the recent scores plus today's, left to right.
     score = (data.get("effectiveness") or {}).get("score")
     prior_scores = [s.get("score") for s in prior_stats if s.get("score")]
     if score and prior_scores:
-        previous = prior_scores[-1]
+        chain = " → ".join(str(int(s)) for s in prior_scores[-2:] + [score])
         out.append(
-            f"Оценка встречи: {int(previous)} → {int(score)} из 10"
-            f"{_trend_arrow(float(score), float(previous))}"
+            f"Оценка встречи: {chain} из 10"
+            f"{_trend_arrow(float(score), float(prior_scores[-1]))}"
         )
+        out.append("")
+
+    if signals:
+        out.append("❗ СИГНАЛЫ")
+        out.extend(f"  – {signal}" for signal in signals)
         out.append("")
 
     return out if len(out) > 1 else []
