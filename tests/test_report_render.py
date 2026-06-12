@@ -138,11 +138,14 @@ def test_accountant_blocks_cross_and_dash_semantics():
     assert "👤 Эмилия\n" not in text
 
 
-def test_manager_block_grouped_numbered_no_poruchila():
+def test_manager_block_name_line_then_numbered_lines():
     text = _render()
     block = text.split("🧭 ЧТО СКАЗАЛА РУКОВОДИТЕЛЬ (ЭМИЛИЯ)")[1].split("⚠️")[0]
-    assert "Общее: Я завтра буду в Арцахе." in block
-    assert ("Оля: 1. Отправлю платежное поручение после митинга. "
+    # Name on its own line; single remark unnumbered, multiple remarks each
+    # on their own numbered line.
+    assert "Общее:\nЯ завтра буду в Арцахе." in block
+    assert ("Оля:\n"
+            "1. Отправлю платежное поручение после митинга.\n"
             "2. Просто предупреди, что если не присылают данные, "
             "то у нас нет информации.") in block
     assert "поручила" not in block
@@ -233,7 +236,7 @@ def test_full_names_normalized_collectives_kept():
     assert "👤 Наира:" in text and "Наира Мхитарян:" not in text
     assert "👤 Все бухгалтеры:\n1. Проверить свои банковские коды. Срок: 2026-03-24" in text
     assert "👤 Тагуи:\n1. Разобраться с делами Алекса. Срок: ❌" in text
-    assert "Наира: Узнай про Сианну Алиеву." in text
+    assert "Наира:\nУзнай про Сианну Алиеву." in text
     assert "не указан" not in text  # all missing deadlines became ❌
 
 

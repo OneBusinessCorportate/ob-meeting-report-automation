@@ -18,8 +18,8 @@ The layout is the approved report with the requested fixes applied
   («👤 Имя - не принимал(а) участия.»);
 - mandatory «Отчёт за вчера / План на сегодня / Блокеры» per accountant:
   ❌ when not voiced, «–» when the person explicitly said there is nothing;
-- manager remarks grouped: one «Общее» line, numbered items per person,
-  no «поручила»;
+- manager remarks grouped («Общее» first): the name on its own line, every
+  remark on its own numbered line below, no «поручила»;
 - risks: severity icon BEFORE the number («🔴 1. …»), then one
   «Что решили: …» line (❌ when no next step was discussed) — no
   Ответственный/Срок/Как контролируем lines;
@@ -157,12 +157,6 @@ def _optional_field_lines(label: str, value: Any) -> List[str]:
 def _value_or_cross(value: Any) -> str:
     kind, items = _classify(value)
     return "; ".join(items) if kind == "items" else MISSING
-
-
-def _numbered_inline(texts: List[str]) -> str:
-    if len(texts) == 1:
-        return texts[0]
-    return " ".join(f"{i}. {t}" for i, t in enumerate(texts, start=1))
 
 
 def _find_manager(team_roster: Optional[List[Dict[str, Any]]]) -> str:
@@ -313,9 +307,15 @@ def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> Li
         return []
 
     out = [f"🧭 ЧТО СКАЗАЛА РУКОВОДИТЕЛЬ ({manager.upper()})"]
-    # «Общее» first, then per-person lines; tasks per person on one line.
+    # «Общее» first, then per person: the name on its own line, every remark
+    # on its own line below (numbered when there is more than one).
     for key in (["Общее"] if "Общее" in grouped else []) + [k for k in order if k != "Общее"]:
-        out.append(f"{key}: {_numbered_inline(grouped[key])}")
+        out.append(f"{key}:")
+        texts = grouped[key]
+        if len(texts) == 1:
+            out.append(texts[0])
+        else:
+            out.extend(f"{i}. {text}" for i, text in enumerate(texts, start=1))
     out.append("")
     return out
 
