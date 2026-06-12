@@ -51,6 +51,7 @@ _EXTRA_FIELDS = (
     "participant_breakdown",
     "manager_reactions",
     "followup_on_previous_tasks",
+    "previous_tasks_status",
     "who_took_ownership",
     "talk_share",
 )
@@ -118,6 +119,7 @@ class AIClient:
         participants: Optional[List[str]] = None,
         team_roster: Optional[List[Any]] = None,
         prior_context: Optional[List[Any]] = None,
+        previous_tasks: Optional[Dict[str, Any]] = None,
         max_tokens: Optional[int] = None,
     ) -> AnalysisResult:
         """Generate a structured L2 report from the FULL transcript."""
@@ -142,6 +144,7 @@ class AIClient:
             participants=participants,
             team_roster=team_roster,
             prior_context=prior_context,
+            previous_tasks=previous_tasks,
         )
 
         # Try once; if the model returns empty/unparseable JSON (most often a

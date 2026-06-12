@@ -24,6 +24,9 @@ The layout is the approved report with the requested fixes applied
   «Что решили: …» line (❌ when no next step was discussed) — no
   Ответственный/Срок/Как контролируем lines;
 - tasks on control grouped by assignee (👤 Имя: 1. … Срок: ❌);
+- «динамика» (📈 ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ): each previous task graded
+  ✅/🟡/❌/❓ against today's transcript, with the per-accountant completion
+  rate computed here (not by the AI);
 - «Открытые вопросы» at the end; «Обратить внимание» is stored but not shown.
 """
 from __future__ import annotations
@@ -194,6 +197,7 @@ def render_telegram_report(
     lines += _manager_block(data, manager, roster_firsts)
     lines += _risks_block(data)
     lines += _tasks_block(data, roster_firsts)
+    lines += _previous_tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
 
     return _finalize(lines)
@@ -358,6 +362,48 @@ def _tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
         for i, task in enumerate(grouped[assignee], start=1):
             text = _clean(task.get("text")).rstrip(".")
             out.append(f"{i}. {text}. Срок: {_value_or_cross(task.get('deadline'))}")
+        out.append("")
+    return out
+
+
+_PREV_TASK_ICONS = {
+    "выполнено": "✅",
+    "частично": "🟡",
+    "не выполнено": "❌",
+    "не упоминалось": "❓",
+}
+
+
+def _previous_tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
+    """Динамика: статус задач прошлой планёрки и % выполнения по бухгалтеру."""
+    statuses = [
+        s for s in data.get("previous_tasks_status") or [] if _clean(s.get("task"))
+    ]
+    if not statuses:
+        return []
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+    for status in statuses:
+        kind, names = _classify(status.get("assignee"))
+        assignee = _person(names[0], roster_firsts) if kind == "items" else "Не указано"
+        if assignee not in grouped:
+            grouped[assignee] = []
+            order.append(assignee)
+        grouped[assignee].append(status)
+
+    out = ["📈 ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ"]
+    for assignee in order:
+        tasks = grouped[assignee]
+        done = sum(1 for t in tasks if _clean(t.get("status")).lower() == "выполнено")
+        pct = round(100 * done / len(tasks))
+        out.append(f"👤 {assignee}: выполнено {done} из {len(tasks)} ({pct}%)")
+        for task in tasks:
+            icon = _PREV_TASK_ICONS.get(_clean(task.get("status")).lower(), "❓")
+            line = f"  {icon} {_clean(task.get('task'))}"
+            evidence = _clean(task.get("evidence"))
+            if evidence and evidence.lower() not in _MISSING_WORDS:
+                line += f" — {evidence}"
+            out.append(line)
         out.append("")
     return out
 

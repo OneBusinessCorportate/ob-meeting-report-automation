@@ -138,9 +138,13 @@ def _analyze_meeting_inner(
     # Cross-meeting context: summaries + attention_points from recent prior
     # meetings, so the AI can flag issues that keep recurring. Best-effort.
     prior_context: List[Dict[str, Any]] = []
+    previous_tasks: Optional[Dict[str, Any]] = None
     before = meeting.get("actual_start") or meeting.get("ingested_at")
     if before:
         prior_context = repo.get_recent_meeting_context(before, limit=5)
+        # Tasks of the previous stand-up: the AI grades each one against
+        # today's transcript so the report can show the «динамика» block.
+        previous_tasks = repo.get_previous_meeting_tasks(before)
 
     result = ai.analyze(
         transcript,
@@ -150,6 +154,7 @@ def _analyze_meeting_inner(
         participants=_participants_from_meeting(meeting),
         team_roster=team_roster,
         prior_context=prior_context,
+        previous_tasks=previous_tasks,
     )
 
     if not result.ok:

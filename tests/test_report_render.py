@@ -199,6 +199,36 @@ def test_tasks_grouped_by_assignee():
     assert "👤 Оля:\n1. Подготовить договор с Бета. Срок: 2026-06-15" in block
 
 
+def test_previous_tasks_dynamics_with_completion_rate():
+    data = {
+        "previous_tasks_status": [
+            {"task": "Отправить платежное поручение.", "assignee": "Оля Бухгалтер",
+             "status": "выполнено", "evidence": "сказала, что отправила"},
+            {"task": "Заключить договор с Бета.", "assignee": "Оля",
+             "status": "не выполнено", "evidence": ""},
+            {"task": "Проверить банковские коды.", "assignee": "Оля",
+             "status": "частично", "evidence": ""},
+            {"task": "Подготовить список клиентов с оборотом 200 млн.",
+             "assignee": "Наира Мхитарян", "status": "не упоминалось", "evidence": ""},
+        ]
+    }
+    roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
+    text = render_telegram_report(data, meeting_date="2026-06-12", team_roster=roster)
+    assert "📈 ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ" in text
+    # Completion rate is computed by script, names normalized to first names.
+    assert "👤 Оля: выполнено 1 из 3 (33%)" in text
+    assert "  ✅ Отправить платежное поручение. — сказала, что отправила" in text
+    assert "  ❌ Заключить договор с Бета." in text
+    assert "  🟡 Проверить банковские коды." in text
+    assert "👤 Наира: выполнено 0 из 1 (0%)" in text
+    assert "  ❓ Подготовить список клиентов с оборотом 200 млн." in text
+
+
+def test_previous_tasks_block_skipped_without_data():
+    text = _render()  # FULL_DATA has no previous_tasks_status
+    assert "ЗАДАЧИ С ПРОШЛОЙ ПЛАНЁРКИ" not in text
+
+
 def test_open_questions_present_and_noise_absent():
     text = _render()
     assert "❓ ОТКРЫТЫЕ ВОПРОСЫ\n  – Работаем ли дальше с должниками?" in text

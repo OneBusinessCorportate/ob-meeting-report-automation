@@ -509,6 +509,55 @@ class SupabaseRepo:
             log.warning("Could not load prior meeting context: %s", exc)
             return []
 
+    def get_previous_meeting_tasks(self, before) -> Optional[Dict[str, Any]]:
+        """Action items from the most recent analyzed meeting before ``before``.
+
+        Powers the «динамика» block: the AI checks each previous task against
+        today's transcript and the report shows the completion rate per
+        accountant. Best-effort: returns None and never raises.
+        """
+        try:
+            before_iso = before.isoformat() if hasattr(before, "isoformat") else str(before)
+            meetings = (
+                self.client.table("mtg_meetings")
+                .select("id, title, actual_start")
+                .lt("actual_start", before_iso)
+                .order("actual_start", desc=True)
+                .limit(5)
+                .execute()
+            ).data or []
+            for meeting in meetings:
+                rows = (
+                    self.client.table("mtg_analyses")
+                    .select("action_items")
+                    .eq("meeting_id", meeting["id"])
+                    .eq("is_current", True)
+                    .eq("status", "completed")
+                    .limit(1)
+                    .execute()
+                ).data
+                if not rows:
+                    continue
+                action_items = rows[0].get("action_items") or []
+                tasks = [
+                    {
+                        "task": (item.get("text") or "").strip(),
+                        "assignee": item.get("assignee") or "Не указано",
+                        "deadline": item.get("deadline") or "Не указано",
+                    }
+                    for item in action_items
+                    if isinstance(item, dict) and (item.get("text") or "").strip()
+                ]
+                if tasks:
+                    return {
+                        "date": (meeting.get("actual_start") or "")[:10],
+                        "tasks": tasks,
+                    }
+            return None
+        except Exception as exc:  # best-effort, never crash analysis
+            log.warning("Could not load previous meeting tasks: %s", exc)
+            return None
+
     # --- Daily send log (idempotency across cron re-runs) ----------------------
     def claim_daily_send(self, on_date: date, kind: str) -> bool:
         """Atomically claim today's one-send slot for ``kind``.
