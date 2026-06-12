@@ -174,6 +174,23 @@ def test_risks_icon_before_number_with_decision_line():
     assert "\n\n🟢 2. Документы" in block
 
 
+def test_risks_sorted_critical_first():
+    data = {
+        "problems_risks": [
+            {"text": "Мелкая задержка документов.", "severity": "low"},
+            {"text": "Клиент не платит полгода.", "severity": "high"},
+            {"text": "Список не обновляется.", "severity": "medium"},
+            {"text": "Второй клиент не платит.", "severity": "high"},
+        ]
+    }
+    text = render_telegram_report(data, meeting_date="2026-06-12", team_roster=ROSTER)
+    # high -> medium -> low, stable order within the same severity.
+    assert "🔴 1. Клиент не платит полгода." in text
+    assert "🔴 2. Второй клиент не платит." in text
+    assert "🟡 3. Список не обновляется." in text
+    assert "🟢 4. Мелкая задержка документов." in text
+
+
 def test_tasks_grouped_by_assignee():
     text = _render()
     block = text.split("✅ ЗАДАЧИ НА КОНТРОЛЕ")[1].split("❓")[0]

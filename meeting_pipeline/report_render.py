@@ -324,6 +324,9 @@ def _risks_block(data: Dict[str, Any]) -> List[str]:
     risks = [r for r in data.get("problems_risks") or [] if _clean(r.get("text"))]
     if not risks:
         return []
+    # Critical situations first: high -> medium -> low (stable within a level).
+    severity_rank = {"high": 0, "medium": 1, "low": 2}
+    risks.sort(key=lambda r: severity_rank.get(_clean(r.get("severity")).lower(), 1))
     out = ["⚠️ РИСКИ И СИТУАЦИИ", ""]
     for i, risk in enumerate(risks, start=1):
         severity = _clean(risk.get("severity")).lower()
