@@ -793,6 +793,58 @@ def test_deliver_rerenders_stored_report_with_current_template():
     assert "🔴 1. Долг клиента." in text
     assert "Что решили: ❌" in text  # legacy analysis has no decision field
     assert "👤 Стелла" in text and "План на сегодня: ❌" in text and "Блокеры: –" in text
+    # No previous-task dynamics here -> no separate analytics message.
+    assert len(session.calls) == 1
+
+
+def test_deliver_sends_analytics_as_separate_message():
+    """Analytics goes out as its own Telegram message right after the report."""
+    config = _config()
+    repo = _repo()
+    repo.client.store["mtg_participants"] = [
+        {"full_name": "Эмилия Аванесян", "is_internal": True,
+         "metadata": {"role": "руководитель"}},
+        {"full_name": "Оля Бухгалтер", "is_internal": True,
+         "metadata": {"role": "бухгалтер"}},
+    ]
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_2026_03_25",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-03-25T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="fallback",
+        ai_metadata={"report_extras": {
+            "effectiveness": {"score": 6, "criteria": [
+                {"criterion": "Все сотрудники высказались", "status": "выполнено"}]},
+            "participant_breakdown": [
+                {"name": "Оля", "participated": True, "yesterday": "x",
+                 "today_plan": [], "blockers": ["нет"]}],
+            "previous_tasks_status": [
+                {"task": "Отправить поручение.", "assignee": "Оля",
+                 "status": "выполнено", "evidence": "отправила"}],
+        }},
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = deliver_today(config, date_str="2026-03-25", repo=repo, telegram=telegram)
+    assert result["delivered"] is True
+    assert result["analytics_sent"] is True
+    # Two messages: the report first, the analytics right after.
+    assert len(session.calls) == 2
+    report_msg, analytics_msg = session.calls[0]["text"], session.calls[1]["text"]
+    assert "👤 Оля" in report_msg
+    assert "📈 АНАЛИТИКА" not in report_msg  # analytics moved out of the report
+    assert analytics_msg.startswith("📊 *Аналитика планёрки*") or \
+        analytics_msg.startswith("📊 Аналитика планёрки")
+    assert "📈 АНАЛИТИКА" in analytics_msg
+    assert "👤 Оля: 100%" in analytics_msg
 
 
 def test_telegram_sends_converted_bold():

@@ -10,7 +10,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from meeting_pipeline.report_render import render_telegram_report  # noqa: E402
+from meeting_pipeline.report_render import (  # noqa: E402
+    render_analytics_message,
+    render_telegram_report,
+)
 
 ROSTER = [
     {"name": "Эмилия Аванесян", "role": "руководитель"},
@@ -277,6 +280,33 @@ def test_analytics_block_with_completion_rates_and_trends():
 def test_analytics_block_skipped_without_data():
     text = _render()  # FULL_DATA has no previous_tasks_status / prior stats
     assert "АНАЛИТИКА" not in text
+
+
+def test_include_analytics_false_drops_block_for_separate_message():
+    data = {
+        "effectiveness": {"score": 7, "criteria": []},
+        "previous_tasks_status": [
+            {"task": "Отправить платежное поручение.", "assignee": "Оля",
+             "status": "выполнено", "evidence": ""},
+        ],
+    }
+    report = render_telegram_report(
+        data, meeting_date="2026-06-12", team_roster=ROSTER, include_analytics=False
+    )
+    assert "📈 АНАЛИТИКА" not in report
+    # The standalone analytics message carries the same block under its header.
+    analytics = render_analytics_message(
+        data, meeting_date="2026-06-12", team_roster=ROSTER
+    )
+    assert analytics.startswith("📊 Аналитика планёрки")
+    assert "2026-06-12" in analytics
+    assert "📈 АНАЛИТИКА" in analytics
+    assert "👤 Оля: 100%" in analytics
+
+
+def test_analytics_message_empty_when_no_dynamics():
+    # No previous-task statuses and no prior stats -> nothing to send.
+    assert render_analytics_message(dict(FULL_DATA), team_roster=ROSTER) == ""
 
 
 def test_open_questions_present_and_noise_absent():

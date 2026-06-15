@@ -176,6 +176,7 @@ def render_telegram_report(
     time_range: Optional[str] = None,
     team_roster: Optional[List[Dict[str, Any]]] = None,
     prior_stats: Optional[List[Dict[str, Any]]] = None,
+    include_analytics: bool = True,
 ) -> str:
     """Build the full Telegram report text from the structured analysis JSON.
 
@@ -184,6 +185,10 @@ def render_telegram_report(
     ``prior_stats`` (oldest first, from ``get_prior_meeting_stats``) powers the
     trend lines of the analytics block. Sections with no data are dropped
     whole; the structure never changes.
+
+    Set ``include_analytics=False`` to leave out the closing analytics block —
+    delivery sends it as a separate Telegram message via
+    :func:`render_analytics_message`.
     """
     manager = _find_manager(team_roster)
     roster_firsts = _roster_firsts(team_roster)
@@ -201,9 +206,34 @@ def render_telegram_report(
     lines += _risks_block(data)
     lines += _tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
-    lines += _analytics_block(data, prior_stats, roster_firsts)
+    if include_analytics:
+        lines += _analytics_block(data, prior_stats, roster_firsts)
 
     return _finalize(lines)
+
+
+def render_analytics_message(
+    data: Dict[str, Any],
+    *,
+    meeting_date: Optional[str] = None,
+    team_roster: Optional[List[Dict[str, Any]]] = None,
+    prior_stats: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Build the standalone analytics message (sent right after the report).
+
+    Returns an empty string when there is no analytics to show (e.g. the first
+    stand-up, or an analysis stored before the dynamics feature existed), so
+    the caller can simply skip the second message.
+    """
+    roster_firsts = _roster_firsts(team_roster)
+    block = _analytics_block(data, prior_stats, roster_firsts)
+    if not block:
+        return ""
+    header: List[str] = ["📊 Аналитика планёрки"]
+    if meeting_date:
+        header.append(meeting_date)
+    header.append("")
+    return _finalize(header + block)
 
 
 # --- sections -----------------------------------------------------------------
