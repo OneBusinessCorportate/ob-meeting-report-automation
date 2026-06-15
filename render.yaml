@@ -51,11 +51,14 @@ services:
       - key: MEETING_DELIVERY_TIME
         value: "11:00"
       # --- Interview sync (same service; see scripts/run_daily.py) ---
-      # Cadence overrides (days); defaults: full=30, mini=15.
+      # Cadence overrides (days). full=1 means the candidate sheet is checked
+      # every weekday: any NEW interview is analyzed and its Telegram report is
+      # sent within a day. Already-analyzed candidates are skipped (idempotent),
+      # so this neither re-sends nor re-bills for existing ones.
       - key: INTERVIEW_FULL_INTERVAL_DAYS
-        value: "30"
+        value: "1"
       - key: INTERVIEW_MINI_INTERVAL_DAYS
-        value: "15"
+        value: "1"
       # Source of the candidate/interview table (set the secret in the dashboard):
       - key: INTERVIEW_SPREADSHEET_ID
         sync: false
