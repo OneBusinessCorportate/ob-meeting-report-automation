@@ -244,6 +244,45 @@ def test_analytics_score_and_manager_conduct():
     assert "Говорит 55% времени" in block  # no «много» note below 70%
 
 
+def test_analytics_conduct_shows_reason_and_late_start():
+    data = {
+        "effectiveness": {"score": 6, "criteria": [
+            {"criterion": "Все высказались", "status": "выполнено"},
+            {"criterion": "Вопросы", "status": "выполнено"},
+            {"criterion": "Задачи", "status": "выполнено"},
+            {"criterion": "Новости", "status": "выполнено"},
+            {"criterion": "Похвала", "status": "выполнено"},
+            {"criterion": "Прошлые задачи", "status": "частично",
+             "detail": "Спросила про задачи, но не по всем. Были запросы по Алиас и Клинтек."},
+        ]},
+        "late_start": True, "late_start_minutes": 4,
+        "participant_breakdown": [{"name": "Оля", "participated": True, "today_plan": ["x"]}],
+    }
+    text = render_analytics_message(data, meeting_date="2026-06-12", team_roster=ROSTER)
+    # Discipline line under the score.
+    assert "🕐 Начали с опозданием на 4 мин" in text
+    # The «why» (AI detail, first sentence, no trailing period) is shown on the gap.
+    assert "🟡 Разбирает прошлые задачи — Спросила про задачи, но не по всем" in text
+
+
+def test_analytics_questions_and_help_to_manager():
+    data = {
+        "effectiveness": {"score": 6, "criteria": _CRITERIA_ALL_GOOD},
+        "participant_breakdown": [
+            {"name": "Оля", "participated": True, "today_plan": ["a"],
+             "question_to_manager": "Что означает банак?"},
+            {"name": "Наира Мхитарян", "participated": True, "today_plan": ["b"],
+             "needs_help": "нужна помощь с ИНН"},
+            {"name": "Тагуи", "participated": True, "today_plan": ["c"]},
+        ],
+    }
+    roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
+    text = render_analytics_message(data, meeting_date="2026-06-12", team_roster=roster)
+    block = text.split("🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ")[1]
+    assert "Вопросы руководителю: 1 (Оля)" in block
+    assert "🆘 Нужна помощь / блокеры: Наира" in block
+
+
 def test_analytics_block_skipped_without_data():
     # No checklist and no participant breakdown -> nothing about the meeting to
     # analyze, so the block is dropped entirely.

@@ -31,13 +31,14 @@ delivered as a SEPARATE Telegram message) has ONE goal: make the planёрка
 itself run better (not manage the whole company). So it shows only meeting
 mechanics, compact and scannable:
 
-- the meeting effectiveness score (+ trend over recent stand-ups);
+- the meeting effectiveness score (+ trend) and a late-start discipline note;
 - «🧭 РУКОВОДИТЕЛЬ ВЕДЁТ ВСТРЕЧУ»: the facilitation checklist — does the
   manager ask questions, set tasks, review past tasks, praise, share news — each
-  ✅/🟡/❌, flagged «N-ю планёрку подряд» when a gap is chronic; plus talk share;
+  ✅/🟡/❌; a gap carries the AI's short «why» and «N-ю планёрку подряд» when it
+  is chronic; plus talk share;
 - «🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ»: did each accountant voice a plan for the day,
-  and how concretely (tasks без срока / без ответственного = «поставлено не
-  так»), plus who stayed silent;
+  how concretely (tasks без срока / без ответственного = «поставлено не так»),
+  what questions they put to the manager, who asked for help, and who was silent;
 - «💡 УЛУЧШИТЬ НА СЛЕДУЮЩЕЙ»: concrete, meeting-level fixes derived from the gaps.
 
 Client-workload and company-level recurring problems were dropped on purpose —
@@ -502,7 +503,13 @@ def _score_line(data: Dict[str, Any], prior_stats: List[Dict[str, Any]]) -> List
     if prior_scores:
         chain = "→".join(str(int(s)) for s in prior_scores[-2:] + [score])
         line += f" ({chain}{_arrow(score, prior_scores[-1])})"
-    return [line]
+    out = [line]
+    # Discipline: a late start is a meeting-effectiveness signal.
+    if data.get("late_start"):
+        minutes = data.get("late_start_minutes") or 0
+        out.append(f"🕐 Начали с опозданием на {int(minutes)} мин" if minutes
+                   else "🕐 Начали с опозданием")
+    return out
 
 
 # Manager-facilitation behaviours, by their index in the effectiveness checklist
@@ -522,6 +529,30 @@ def _criterion_status(data: Dict[str, Any], idx: int) -> Optional[str]:
     if idx < len(criteria) and isinstance(criteria[idx], dict):
         return _clean(criteria[idx].get("status")).lower() or None
     return None
+
+
+def _criterion_detail(data: Dict[str, Any], idx: int) -> str:
+    criteria = (data.get("effectiveness") or {}).get("criteria") or []
+    if idx < len(criteria) and isinstance(criteria[idx], dict):
+        return _clean(criteria[idx].get("detail"))
+    return ""
+
+
+def _short(text: Any, limit: int = 80) -> str:
+    """First sentence of ``text``, trimmed to ``limit`` chars on a word boundary.
+
+    Used to surface the AI's short «why» for a checklist gap without bloating the
+    line. Returns '' for empty / «Не указано» values.
+    """
+    text = _clean(text)
+    if not text or text.lower() in _MISSING_WORDS:
+        return ""
+    head, sep, _ = text.partition(". ")
+    if sep and len(head) >= 20:
+        text = head
+    if len(text) > limit:
+        return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return text.rstrip(" .")
 
 
 def _conduct_streak(idx: int, prior_stats: List[Dict[str, Any]]) -> int:
@@ -550,9 +581,17 @@ def _manager_conduct_lines(
         icon = _STATUS_ICONS.get(status, MISSING)
         line = f"{icon} {label}"
         if status != "выполнено":
+            # Surface the AI's short «why» + the chronic-gap streak, so a 🟡/❌
+            # is actionable instead of a bare icon.
+            extras = []
+            detail = _short(_criterion_detail(data, idx))
+            if detail:
+                extras.append(detail)
             streak = _conduct_streak(idx, prior_stats)
             if streak >= 2:
-                line += f" — {streak}-ю планёрку подряд"
+                extras.append(f"{streak}-ю планёрку подряд")
+            if extras:
+                line += " — " + " · ".join(extras)
         body.append(line)
 
     talk = data.get("talk_share") or {}
@@ -597,6 +636,24 @@ def _accountant_tasks_lines(
             out.append(f"Задачи без срока: {no_deadline} из {len(actions)} ⚠️")
         if no_owner:
             out.append(f"Задачи без ответственного: {no_owner} из {len(actions)} ⚠️")
+
+    # Questions accountants put to the manager — they need an answer ON the call.
+    askers = [
+        _person(e.get("name"), roster_firsts)
+        for e in participated
+        if _has_text(e.get("question_to_manager"))
+    ]
+    if askers:
+        out.append(f"Вопросы руководителю: {len(askers)} ({', '.join(askers)})")
+
+    # Open help requests / blockers raised — the meeting should unblock them.
+    need_help = [
+        _person(e.get("name"), roster_firsts)
+        for e in participated
+        if _has_text(e.get("needs_help")) or _real_count(e.get("blockers"))
+    ]
+    if need_help:
+        out.append(f"🆘 Нужна помощь / блокеры: {', '.join(need_help)}")
 
     if silent:
         out.append(f"Промолчали: {', '.join(silent)}")
