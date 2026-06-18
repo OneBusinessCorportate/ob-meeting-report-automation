@@ -52,6 +52,9 @@ begin
     select i.id, c.full_name, i.interview_type, i.call_url,
            a.recommendation, s.overall_score, a.summary,
            a.candidate_strengths, a.candidate_weaknesses, a.next_steps, a.reasoning,
+           -- 5 thesis scores (Тезисы 1–5) for the per-candidate breakdown line.
+           s.knowledge_score, s.skills_score, s.responsibility_score,
+           s.resilience_score, s.communication_score,
            i.updated_at
     from public.intv_interviews i
     join public.intv_candidates c on c.id = i.candidate_id
@@ -62,9 +65,15 @@ begin
   )
   select count(*),
     string_agg(
+      -- One compact line with the 5 thesis scores, shown for every candidate.
+      ( '🧩 Тезисы: Знания '   || coalesce(knowledge_score::text,'—')
+        || ' · Опыт/ArmSoft '  || coalesce(skills_score::text,'—')
+        || ' · Ответств. '     || coalesce(responsibility_score::text,'—')
+        || ' · Стрессоуст. '   || coalesce(resilience_score::text,'—')
+        || ' · Коммуник. '     || coalesce(communication_score::text,'—') ) ||
       case when recommendation = 'hire' then
         -- Hired: fuller block.
-        '✅ ' || full_name || ' — ' || coalesce(interview_type,'—') || E'\n'
+        E'\n' || '✅ ' || full_name || ' — ' || coalesce(interview_type,'—') || E'\n'
         || 'Рекомендация: НАНЯТЬ' || coalesce(' · итог ' || overall_score || '/10','') || E'\n'
         || 'Кратко: '  || coalesce(left(summary,420),'—') || E'\n'
         || 'Сильные: ' || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(candidate_strengths,'[]'::jsonb)) t),''),'—') || E'\n'
@@ -74,7 +83,7 @@ begin
         || 'Ссылка: '  || coalesce(call_url,'—')
       else
         -- Not hired: compact line.
-        '• ' || full_name || ' — ' || coalesce(interview_type,'—')
+        E'\n' || '• ' || full_name || ' — ' || coalesce(interview_type,'—')
         || ' · ' || (case recommendation
                        when 'maybe'    then 'спорно 🟡'
                        when 'reject'   then 'отказать ⛔'
