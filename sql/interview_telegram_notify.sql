@@ -11,9 +11,10 @@
 -- transition, and a 1-minute cron (intv_retry_digest) sends/resends until
 -- Telegram confirms HTTP 200 for that exact change.
 --
--- The digest covers the latest processed participants. Hired candidates get a
--- fuller block (summary, strengths, weaknesses, next steps, reasoning); everyone
--- else gets a compact line. On 'error': a short immediate message.
+-- The digest lists EVERY processed candidate once, each with its 5-thesis
+-- evaluation + a short (first-sentence) summary. It is split into as many
+-- ≤4096-char messages as needed, keeping each candidate whole — nothing is ever
+-- truncated or cut mid-word. On 'error': a short immediate message.
 --
 -- Secrets from Supabase Vault (telegram_bot_token / telegram_chat_id), ASCII only.
 -- Stays silent until they exist. Disable everything:
@@ -55,26 +56,33 @@ begin
 end;
 $$;
 
--- Build the digest and send it as AS MANY Telegram messages as needed: each
--- candidate is a self-contained block (5-thesis breakdown + the per-candidate
--- structure), packed into ≤4096-char messages. Nothing is ever truncated; the
--- report simply spans multiple messages. Returns the LAST request id (what the
--- retry state machine tracks).
-create or replace function public.intv_send_digest()
-returns bigint
+-- Shorten prose to its first COMPLETE sentence (>= ~50 chars, ending on .!?), so
+-- the digest stays compact without cutting mid-word/idea. Text with no sentence
+-- break is kept whole (it is already a single idea).
+create or replace function public.intv_first_sentence(t text)
+returns text
+language sql immutable
+as $$
+  select case
+    when t is null or btrim(t) = '' then null
+    else coalesce(substring(btrim(t) from '^.{50,}?[.!?]'), btrim(t))
+  end;
+$$;
+
+-- Build Telegram-safe message chunks. Each candidate's block (5-thesis breakdown
+-- + the per-candidate structure, with SHORT first-sentence Кратко/Обоснование)
+-- is kept WHOLE in one message. Whole candidates are packed until the next won't
+-- fit, then a new message starts. Only a single candidate larger than one message
+-- is line/word-split. Nothing is ever cut mid-word or dropped. No side effects.
+create or replace function public.intv_digest_chunks(v_limit int default 3800)
+returns text[]
 language plpgsql security definer
 set search_path = public, vault, net, extensions
 as $$
 declare
-  v_tok text; v_chat text; v_count int; v_req bigint; v_change timestamptz;
-  v_header text; v_chunk text := ''; v_first boolean := true;
-  v_limit int := 3900;   -- safety margin under Telegram's 4096 hard limit
-  rec record;
+  v_count int; v_header text; v_chunk text := '';
+  out_arr text[] := '{}'; b text; ln text; rest text; piece text; n int;
 begin
-  select decrypted_secret into v_tok  from vault.decrypted_secrets where name='telegram_bot_token' limit 1;
-  select decrypted_secret into v_chat from vault.decrypted_secrets where name='telegram_chat_id'   limit 1;
-  if v_tok is null or v_chat is null then return null; end if;
-
   select count(*) into v_count
   from public.intv_interviews i
   join public.intv_analyses a on a.interview_id = i.id and a.is_current and a.status='completed'
@@ -82,10 +90,7 @@ begin
 
   v_header := '📋 Обучающий центр — обработанные собеседования (' || coalesce(v_count,0) || ')';
 
-  -- One self-contained block per candidate (thesis breakdown + the previous
-  -- per-candidate structure), newest/hired first. Older interviews without a
-  -- theses array fall back to the compact one-line thesis summary.
-  for rec in
+  for b in
     with base as (
       select i.id, c.full_name, i.interview_type, i.call_url,
              a.recommendation, s.overall_score, a.summary,
@@ -100,72 +105,116 @@ begin
       left join public.intv_scores s on s.analysis_id = a.id
       where i.status='analysis_done'
       order by i.updated_at desc
+    ), rendered as (
+      select
+        coalesce(
+          nullif(
+            '🧩 Оценка по 5 тезисам:' || E'\n' ||
+            (select string_agg(
+                (e->>'id') || '. ' || coalesce(e->>'title','') || ' — '
+                || coalesce(e->>'score','—') || '/10'
+                || coalesce(': ' || nullif(left(e->>'comment',90),''),''),
+                E'\n' order by (e->>'id')::int)
+             from jsonb_array_elements(coalesce(theses,'[]'::jsonb)) e),
+            '🧩 Оценка по 5 тезисам:' || E'\n'),
+          '🧩 Тезисы: Знания '   || coalesce(knowledge_score::text,'—')
+            || ' · Опыт/ArmSoft '|| coalesce(skills_score::text,'—')
+            || ' · Ответств. '   || coalesce(responsibility_score::text,'—')
+            || ' · Стрессоуст. ' || coalesce(resilience_score::text,'—')
+            || ' · Коммуник. '   || coalesce(communication_score::text,'—')
+        ) ||
+        case when recommendation = 'hire' then
+          E'\n' || '✅ ' || full_name || ' — ' || coalesce(interview_type,'—') || E'\n'
+          || 'Рекомендация: НАНЯТЬ' || coalesce(' · итог ' || overall_score || '/10','') || E'\n'
+          || 'Кратко: '  || coalesce(public.intv_first_sentence(summary),'—') || E'\n'
+          || 'Сильные: ' || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(candidate_strengths,'[]'::jsonb)) t),''),'—') || E'\n'
+          || 'Слабые: '  || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(candidate_weaknesses,'[]'::jsonb)) t),''),'—') || E'\n'
+          || 'След. шаги: ' || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(next_steps,'[]'::jsonb)) t),''),'—') || E'\n'
+          || coalesce('Обоснование: ' || public.intv_first_sentence(reasoning) || E'\n','')
+          || 'Ссылка: '  || coalesce(call_url,'—')
+        else
+          E'\n' || '• ' || full_name || ' — ' || coalesce(interview_type,'—')
+          || ' · ' || (case recommendation
+                         when 'maybe'    then 'спорно 🟡'
+                         when 'reject'   then 'отказать ⛔'
+                         when 'training' then 'на дообучение 🎓'
+                         else coalesce(recommendation,'—') end)
+          || coalesce(' · итог ' || overall_score || '/10','') || E'\n'
+          || 'Кратко: ' || coalesce(public.intv_first_sentence(summary),'—') || E'\n'
+          || 'Ссылка: ' || coalesce(call_url,'—')
+        end AS block,
+        (recommendation = 'hire') as is_hire, updated_at
+      from base
     )
-    select
-      coalesce(
-        nullif(
-          '🧩 Оценка по 5 тезисам:' || E'\n' ||
-          (select string_agg(
-              (e->>'id') || '. ' || coalesce(e->>'title','') || ' — '
-              || coalesce(e->>'score','—') || '/10'
-              || coalesce(': ' || nullif(left(e->>'comment',90),''),''),
-              E'\n' order by (e->>'id')::int)
-           from jsonb_array_elements(coalesce(theses,'[]'::jsonb)) e),
-          '🧩 Оценка по 5 тезисам:' || E'\n'),  -- empty theses -> use fallback
-        '🧩 Тезисы: Знания '   || coalesce(knowledge_score::text,'—')
-          || ' · Опыт/ArmSoft '|| coalesce(skills_score::text,'—')
-          || ' · Ответств. '   || coalesce(responsibility_score::text,'—')
-          || ' · Стрессоуст. ' || coalesce(resilience_score::text,'—')
-          || ' · Коммуник. '   || coalesce(communication_score::text,'—')
-      ) ||
-      case when recommendation = 'hire' then
-        -- Hired: fuller block.
-        E'\n' || '✅ ' || full_name || ' — ' || coalesce(interview_type,'—') || E'\n'
-        || 'Рекомендация: НАНЯТЬ' || coalesce(' · итог ' || overall_score || '/10','') || E'\n'
-        || 'Кратко: '  || coalesce(left(summary,420),'—') || E'\n'
-        || 'Сильные: ' || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(candidate_strengths,'[]'::jsonb)) t),''),'—') || E'\n'
-        || 'Слабые: '  || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(candidate_weaknesses,'[]'::jsonb)) t),''),'—') || E'\n'
-        || 'След. шаги: ' || coalesce(nullif((select string_agg(t,'; ') from jsonb_array_elements_text(coalesce(next_steps,'[]'::jsonb)) t),''),'—') || E'\n'
-        || coalesce('Обоснование: ' || left(reasoning,300) || E'\n','')
-        || 'Ссылка: '  || coalesce(call_url,'—')
-      else
-        -- Not hired: compact line.
-        E'\n' || '• ' || full_name || ' — ' || coalesce(interview_type,'—')
-        || ' · ' || (case recommendation
-                       when 'maybe'    then 'спорно 🟡'
-                       when 'reject'   then 'отказать ⛔'
-                       when 'training' then 'на дообучение 🎓'
-                       else coalesce(recommendation,'—') end)
-        || coalesce(' · итог ' || overall_score || '/10','') || E'\n'
-        || 'Кратко: ' || coalesce(left(summary,160),'—') || E'\n'
-        || 'Ссылка: ' || coalesce(call_url,'—')
-      end AS block,
-      (recommendation = 'hire') as is_hire, updated_at
-    from base
-    order by is_hire desc, updated_at desc
+    select block from rendered order by is_hire desc, updated_at desc
   loop
-    -- A single block should never exceed the limit, but clamp defensively.
-    if char_length(rec.block) > v_limit then
-      rec.block := left(rec.block, v_limit - 20) || E'\n…';
-    end if;
-    -- Flush the current chunk if appending this block would overflow.
-    if v_chunk <> '' and char_length(v_chunk) + 2 + char_length(rec.block) > v_limit then
-      v_req := public.intv_tg_send(v_tok, v_chat, v_chunk);
-      v_chunk := '';
-    end if;
-    if v_chunk = '' then
-      v_chunk := case when v_first then v_header else '📋 (продолжение)' end || E'\n\n' || rec.block;
-      v_first := false;
+    if char_length(b) <= v_limit then
+      -- Whole candidate: flush if it won't fit, then append intact.
+      if v_chunk <> '' and char_length(v_chunk) + 2 + char_length(b) > v_limit then
+        out_arr := out_arr || v_chunk; v_chunk := '';
+      end if;
+      v_chunk := case when v_chunk = '' then b else v_chunk || E'\n\n' || b end;
     else
-      v_chunk := v_chunk || E'\n\n' || rec.block;
+      -- Oversized single candidate: flush, then line/word-split it (last resort).
+      if v_chunk <> '' then out_arr := out_arr || v_chunk; v_chunk := ''; end if;
+      for ln in select s from unnest(string_to_array(b, E'\n')) with ordinality u(s, ord) order by ord
+      loop
+        rest := ln;
+        loop
+          if char_length(rest) <= v_limit then
+            piece := rest; rest := '';
+          else
+            piece := regexp_replace(left(rest, v_limit), '\s\S*$', '');
+            if piece = '' then piece := left(rest, v_limit); end if;
+            rest := ltrim(substr(rest, char_length(piece) + 1));
+          end if;
+          if v_chunk <> '' and char_length(v_chunk) + 1 + char_length(piece) > v_limit then
+            out_arr := out_arr || v_chunk; v_chunk := '';
+          end if;
+          v_chunk := case when v_chunk = '' then piece else v_chunk || E'\n' || piece end;
+          exit when rest = '';
+        end loop;
+      end loop;
+      if v_chunk <> '' then out_arr := out_arr || v_chunk; v_chunk := ''; end if;
     end if;
   end loop;
+  if v_chunk <> '' then out_arr := out_arr || v_chunk; end if;
 
-  -- Send the last (or only) chunk; if there were no candidates, send the header.
-  if v_chunk = '' then
-    v_chunk := v_header || E'\n\n—';
+  -- Header on the first message, continuation marker on the rest.
+  n := coalesce(array_length(out_arr, 1), 0);
+  if n = 0 then
+    return array[v_header || E'\n\n—'];
   end if;
-  v_req := public.intv_tg_send(v_tok, v_chat, v_chunk);
+  out_arr[1] := v_header || E'\n\n' || out_arr[1];
+  if n > 1 then
+    for i in 2 .. n loop
+      out_arr[i] := '📋 (продолжение ' || i || '/' || n || ')' || E'\n\n' || out_arr[i];
+    end loop;
+  end if;
+  return out_arr;
+end;
+$$;
+
+-- Send the report as one Telegram message per chunk. Returns the last req id.
+create or replace function public.intv_send_digest()
+returns bigint
+language plpgsql security definer
+set search_path = public, vault, net, extensions
+as $$
+declare v_tok text; v_chat text; v_req bigint; v_change timestamptz; chunks text[]; ch text;
+begin
+  select decrypted_secret into v_tok  from vault.decrypted_secrets where name='telegram_bot_token' limit 1;
+  select decrypted_secret into v_chat from vault.decrypted_secrets where name='telegram_chat_id'   limit 1;
+  if v_tok is null or v_chat is null then return null; end if;
+
+  chunks := public.intv_digest_chunks();
+  if chunks is null or array_length(chunks,1) is null then
+    v_req := public.intv_tg_send(v_tok, v_chat, '📋 Обучающий центр — обработанные собеседования (0)');
+  else
+    foreach ch in array chunks loop
+      v_req := public.intv_tg_send(v_tok, v_chat, ch);
+    end loop;
+  end if;
 
   -- Stamp the (final) request against the change it is meant to deliver, so the
   -- retry job never credits an older successful request to a newer pending change.
