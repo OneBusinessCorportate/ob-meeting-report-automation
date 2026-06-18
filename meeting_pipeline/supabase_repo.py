@@ -645,6 +645,13 @@ class SupabaseRepo:
                             p["name"] for p in breakdown if not p.get("participated")
                         ],
                         "workload": workload,
+                        # Manager-conduct checklist statuses (ordered) so the
+                        # analytics can spot chronic gaps, e.g. «не спрашивает
+                        # про прошлые задачи N планёрок подряд».
+                        "criteria": [
+                            (c or {}).get("status")
+                            for c in (extras.get("effectiveness") or {}).get("criteria") or []
+                        ],
                         "manager_pct": (extras.get("talk_share") or {}).get("manager_pct"),
                     }
                 )

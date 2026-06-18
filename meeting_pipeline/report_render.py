@@ -27,25 +27,22 @@ The layout is the approved report with the requested fixes applied
 - «Открытые вопросы» at the end; «Обратить внимание» is stored but not shown.
 
 The closing «📊 Аналитика планёрки» (built by :func:`render_analytics_message`,
-delivered as a SEPARATE Telegram message) is deliberately compact and dense —
-leadership asked for «less text, more info». It leads with per-accountant
-workload & engagement and uses tight, scannable lines:
+delivered as a SEPARATE Telegram message) has ONE goal: make the planёрка
+itself run better (not manage the whole company). So it shows only meeting
+mechanics, compact and scannable:
 
-- engagement: one line — «Высказались N/M · говорили X% рук. / Y% бух.»; a
-  second «Молчали: …» line names anyone silent (with their miss-streak);
-- «👥 НАГРУЗКА · клиенты / задачи»: one short «Имя K / P» line per accountant
-  (K clients, P planned tasks), heaviest-load first, with a ↗/↘ when the client
-  load changed vs. last time and ⛔/🆘 flags; people with no load are skipped;
-- «✅ ЗАДАЧИ»: how many tasks were set today (per assignee on one line) and the
-  fair completion of last planёрка's tasks — a per-person one-liner when they
-  were reviewed, or just the count + ⚠️ when nothing was;
-- «📈 ТРЕНДЫ»: a single line — meeting score / manager talk-share / completion
-  over recent stand-ups (each as «a→b→c» with a trend mark);
-- «🔁 ПОВТОРЯЕТСЯ»: recurring cross-meeting problems, severity-sorted, one line.
+- the meeting effectiveness score (+ trend over recent stand-ups);
+- «🧭 РУКОВОДИТЕЛЬ ВЕДЁТ ВСТРЕЧУ»: the facilitation checklist — does the
+  manager ask questions, set tasks, review past tasks, praise, share news — each
+  ✅/🟡/❌, flagged «N-ю планёрку подряд» when a gap is chronic; plus talk share;
+- «🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ»: did each accountant voice a plan for the day,
+  and how concretely (tasks без срока / без ответственного = «поставлено не
+  так»), plus who stayed silent;
+- «💡 УЛУЧШИТЬ НА СЛЕДУЮЩЕЙ»: concrete, meeting-level fixes derived from the gaps.
 
-Every fact is the AI's (from the transcript); every NUMBER (counts, percents,
-trends, streaks) is computed here, so the analytics can never be invented.
-Sections with no data are dropped, so a thin meeting yields a short message.
+Client-workload and company-level recurring problems were dropped on purpose —
+they are about running the company, not the meeting. Every fact is the AI's;
+every NUMBER (counts, streaks, trends) is computed here. Empty sections drop.
 """
 from __future__ import annotations
 
@@ -433,42 +430,6 @@ def _dd_mm(iso_date: Any) -> str:
     return f"{parts[2]}.{parts[1]}" if len(parts) == 3 else text
 
 
-def _fair_pct(done: int, partial: int, assessed: int) -> Optional[int]:
-    """Fair completion percent: «частично» is half a point, only DISCUSSED
-    tasks count (a task nobody asked about must not lower anyone's score)."""
-    if not assessed:
-        return None
-    return round(100 * (done + 0.5 * partial) / assessed)
-
-
-def _entry_pct(entry: Dict[str, Any]) -> Optional[int]:
-    assessed = entry.get("tasks_assessed", entry.get("tasks_total") or 0)
-    return _fair_pct(
-        entry.get("tasks_done") or 0, entry.get("tasks_partial") or 0, assessed
-    )
-
-
-def _counts(done: int, partial: int, failed: int) -> str:
-    parts = []
-    if done:
-        parts.append(f"✅ {done}")
-    if partial:
-        parts.append(f"🟡 {partial}")
-    if failed:
-        parts.append(f"❌ {failed}")
-    return ", ".join(parts)
-
-
-def _ru_plural(n: int, one: str, few: str, many: str) -> str:
-    """Russian plural form for ``n`` (1 клиент / 2 клиента / 5 клиентов)."""
-    n = abs(int(n))
-    if n % 10 == 1 and n % 100 != 11:
-        return one
-    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
-        return few
-    return many
-
-
 def _real_count(value: Any) -> int:
     """How many real items a field holds (drops ❌/«Не указано»/«нет» noise)."""
     kind, items = _classify(value)
@@ -495,15 +456,6 @@ def _roster_breakdown(
     return out
 
 
-def _prior_workload(prior_stats: List[Dict[str, Any]], name: str, roster_firsts: set) -> Optional[int]:
-    """Most recent prior client-load for ``name`` (None when never recorded)."""
-    for entry in reversed(prior_stats):
-        for raw, count in (entry.get("workload") or {}).items():
-            if _person(raw, roster_firsts) == name:
-                return count
-    return None
-
-
 def _arrow(cur: float, prev: float) -> str:
     """Compact trend mark for inline use (no leading space): ↗ / ↘ / ''."""
     if cur > prev:
@@ -511,17 +463,6 @@ def _arrow(cur: float, prev: float) -> str:
     if cur < prev:
         return "↘"
     return ""
-
-
-def _today_completion(statuses: List[Dict[str, Any]]) -> Optional[int]:
-    """Fair completion percent of last planёрка's tasks (None when none discussed)."""
-    if not statuses:
-        return None
-    st = lambda t: _clean(t.get("status")).lower()  # noqa: E731
-    done = sum(1 for s in statuses if st(s) == "выполнено")
-    partial = sum(1 for s in statuses if st(s) == "частично")
-    unmentioned = sum(1 for s in statuses if st(s) == "не упоминалось")
-    return _fair_pct(done, partial, len(statuses) - unmentioned)
 
 
 def _attendance_misses(
@@ -551,206 +492,171 @@ def _attendance_misses(
     return misses, total
 
 
-def _engagement_lines(
-    data: Dict[str, Any],
-    breakdown: List[Dict[str, Any]],
-    prior_stats: List[Dict[str, Any]],
-    roster_firsts: set,
+def _score_line(data: Dict[str, Any], prior_stats: List[Dict[str, Any]]) -> List[str]:
+    """Headline: the meeting effectiveness score (+ trend over recent stand-ups)."""
+    score = (data.get("effectiveness") or {}).get("score")
+    if not score:
+        return []
+    line = f"Оценка встречи: {int(score)}/10"
+    prior_scores = [s.get("score") for s in prior_stats if s.get("score")]
+    if prior_scores:
+        chain = "→".join(str(int(s)) for s in prior_scores[-2:] + [score])
+        line += f" ({chain}{_arrow(score, prior_scores[-1])})"
+    return [line]
+
+
+# Manager-facilitation behaviours, by their index in the effectiveness checklist
+# (criterion 0 «Все высказались» is about the team, shown in the accountants
+# section). Ordered most-important-first for the «как ведёт встречу» view.
+_MANAGER_CONDUCT = [
+    (1, "Задаёт вопросы"),
+    (2, "Ставит задачи команде"),
+    (5, "Разбирает прошлые задачи"),
+    (4, "Хвалит / отмечает работу"),
+    (3, "Делится новостями"),
+]
+
+
+def _criterion_status(data: Dict[str, Any], idx: int) -> Optional[str]:
+    criteria = (data.get("effectiveness") or {}).get("criteria") or []
+    if idx < len(criteria) and isinstance(criteria[idx], dict):
+        return _clean(criteria[idx].get("status")).lower() or None
+    return None
+
+
+def _conduct_streak(idx: int, prior_stats: List[Dict[str, Any]]) -> int:
+    """Consecutive recent stand-ups (most recent first) where the manager did
+    NOT fully satisfy criterion ``idx`` — stops at the first «выполнено»."""
+    streak = 1  # today already counts as a miss when this is called
+    for entry in reversed(prior_stats):
+        crit = entry.get("criteria") or []
+        if idx >= len(crit) or not crit[idx]:
+            break
+        if _clean(crit[idx]).lower() == "выполнено":
+            break
+        streak += 1
+    return streak
+
+
+def _manager_conduct_lines(
+    data: Dict[str, Any], prior_stats: List[Dict[str, Any]]
 ) -> List[str]:
-    """One/two lines: who spoke, the talk balance, and who stayed silent."""
+    """🧭 How the manager ran the meeting: the facilitation checklist + talk share."""
+    body: List[str] = []
+    for idx, label in _MANAGER_CONDUCT:
+        status = _criterion_status(data, idx)
+        if status is None:
+            continue  # older analyses had only 5 criteria — skip the missing one
+        icon = _STATUS_ICONS.get(status, MISSING)
+        line = f"{icon} {label}"
+        if status != "выполнено":
+            streak = _conduct_streak(idx, prior_stats)
+            if streak >= 2:
+                line += f" — {streak}-ю планёрку подряд"
+        body.append(line)
+
+    talk = data.get("talk_share") or {}
+    manager_pct = talk.get("manager_pct")
+    if manager_pct:
+        note = " — говорит много, дайте бухгалтерам слово" if manager_pct >= 70 else ""
+        body.append(f"Говорит {int(manager_pct)}% времени{note}")
+
+    if not body:  # nothing assessable about facilitation -> no empty header
+        return []
+    return ["🧭 РУКОВОДИТЕЛЬ ВЕДЁТ ВСТРЕЧУ"] + body
+
+
+def _accountant_tasks_lines(
+    data: Dict[str, Any], breakdown: List[Dict[str, Any]], roster_firsts: set
+) -> List[str]:
+    """🧑‍💼 Whether accountants set themselves tasks — and how concretely."""
     if not breakdown:
         return []
     participated = [e for e in breakdown if e.get("participated")]
-    talk = data.get("talk_share") or {}
-    manager_pct, accountants_pct = talk.get("manager_pct"), talk.get("accountants_pct")
-    head = f"Высказались {len(participated)}/{len(breakdown)}"
-    if manager_pct or accountants_pct:
-        head += f" · говорили {manager_pct or 0}% рук. / {accountants_pct or 0}% бух."
-    out = [head]
+    if not participated:
+        return []
+    no_plan = [
+        _person(e.get("name"), roster_firsts)
+        for e in participated
+        if _real_count(e.get("today_plan")) == 0
+    ]
+    silent = [_person(e.get("name"), roster_firsts) for e in breakdown if not e.get("participated")]
 
-    silent = [e for e in breakdown if not e.get("participated")]
+    out = ["🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ"]
+    out.append(f"План на сегодня озвучили: {len(participated) - len(no_plan)} из {len(participated)}")
+    if no_plan:
+        out.append(f"Не озвучили план: {', '.join(no_plan)}")
+
+    # Concreteness of the tasks set today: a task without a deadline (or without
+    # an owner) is «поставлена не так» — нельзя проконтролировать.
+    actions = [t for t in data.get("action_items") or [] if _clean(t.get("text"))]
+    if actions:
+        no_deadline = sum(1 for t in actions if not _has_text(t.get("deadline")))
+        no_owner = sum(1 for t in actions if not _has_text(t.get("assignee")))
+        if no_deadline:
+            out.append(f"Задачи без срока: {no_deadline} из {len(actions)} ⚠️")
+        if no_owner:
+            out.append(f"Задачи без ответственного: {no_owner} из {len(actions)} ⚠️")
+
     if silent:
-        misses, total = _attendance_misses(data, prior_stats, roster_firsts)
-        names = []
-        for entry in silent:
-            name = _person(entry.get("name"), roster_firsts)
-            streak = misses.get(name, 0)
-            # «N-ю подряд» only when we actually have a window to judge it.
-            names.append(f"{name} ({streak}-ю подряд)" if total >= 2 and streak >= 2 else name)
-        out.append("Молчали: " + ", ".join(names))
+        out.append(f"Промолчали: {', '.join(silent)}")
     return out
 
 
-def _workload_lines(
+def _improve_lines(
+    data: Dict[str, Any],
     breakdown: List[Dict[str, Any]],
     prior_stats: List[Dict[str, Any]],
     roster_firsts: set,
 ) -> List[str]:
-    """👥 Compact «name clients / tasks» list, heaviest client load first.
+    """💡 Concrete, meeting-level fixes for the next planёрка (derived from gaps)."""
+    tips: List[str] = []
 
-    People who spoke but carried no clients and no tasks are skipped — they add
-    no workload signal. A ↗/↘ marks a change in client load vs. last time; ⛔/🆘
-    flag a blocker or a help request. Counts come straight from the transcript.
-    """
-    rows = []
-    for entry in breakdown:
-        if not entry.get("participated"):
-            continue
-        cases = _real_count(entry.get("cases"))
-        plan = _real_count(entry.get("today_plan"))
-        if cases == 0 and plan == 0:
-            continue
-        rows.append(
-            {
-                "name": _person(entry.get("name"), roster_firsts),
-                "cases": cases,
-                "plan": plan,
-                "blockers": _real_count(entry.get("blockers")),
-                "needs_help": _has_text(entry.get("needs_help")),
-            }
-        )
-    if not rows:
-        return []
-    rows.sort(key=lambda r: (-r["cases"], -r["plan"], r["name"]))
+    # Manager didn't review last planёрка's tasks.
+    if _criterion_status(data, 5) not in (None, "выполнено"):
+        streak = _conduct_streak(5, prior_stats)
+        suffix = f" ({streak}-ю планёрку подряд)" if streak >= 2 else ""
+        tips.append(f"Разобрать статус прошлых задач{suffix}")
 
-    out = ["👥 НАГРУЗКА · клиенты / задачи"]
-    for r in rows:
-        cell = f"{r['cases']}"
-        prev = _prior_workload(prior_stats, r["name"], roster_firsts)
-        if prev is not None and prev != r["cases"]:
-            cell += _arrow(r["cases"], prev)
-        line = f"{r['name']} {cell} / {r['plan']}"
-        if r["blockers"]:
-            line += " ⛔"
-        if r["needs_help"]:
-            line += " 🆘"
-        out.append(line)
-    return out
-
-
-def _tasks_lines(
-    data: Dict[str, Any],
-    statuses: List[Dict[str, Any]],
-    prior_stats: List[Dict[str, Any]],
-    roster_firsts: set,
-) -> List[str]:
-    """✅ Tasks set today + how last planёрка's tasks are progressing (compact)."""
-    body: List[str] = []
+    # Tasks set without a deadline → нельзя проконтролировать.
     actions = [t for t in data.get("action_items") or [] if _clean(t.get("text"))]
-    if actions:
-        per: Dict[str, int] = {}
-        order: List[str] = []
-        for item in actions:
-            kind, names = _classify(item.get("assignee"))
-            who = _person(names[0], roster_firsts) if kind == "items" else "Не указано"
-            if who not in per:
-                per[who] = 0
-                order.append(who)
-            per[who] += 1
-        detail = ", ".join(f"{who} {per[who]}" for who in order)
-        body.append(
-            f"Поставлено сегодня: {len(actions)} "
-            f"{_ru_plural(len(actions), 'задача', 'задачи', 'задач')} ({detail})"
-        )
+    no_deadline = sum(1 for t in actions if not _has_text(t.get("deadline")))
+    if actions and no_deadline >= max(2, len(actions) // 3):
+        tips.append(f"Проставлять задачам сроки ({no_deadline} из {len(actions)} без даты)")
 
-    if statuses:
-        st = lambda t: _clean(t.get("status")).lower()  # noqa: E731
-        unmentioned = sum(1 for s in statuses if st(s) == "не упоминалось")
-        today_pct = _today_completion(statuses)
-        if today_pct is None:
-            prev_date = ""
-            if prior_stats and prior_stats[-1].get("date"):
-                prev_date = f" ({_dd_mm(prior_stats[-1]['date'])})"
-            body.append(
-                f"С прошлой планёрки{prev_date} не разобрали {unmentioned} "
-                f"{_ru_plural(unmentioned, 'задачу', 'задачи', 'задач')} ⚠️"
-            )
-        else:
-            done = sum(1 for s in statuses if st(s) == "выполнено")
-            partial = sum(1 for s in statuses if st(s) == "частично")
-            assessed = len(statuses) - unmentioned
-            failed = assessed - done - partial
-            head = f"С прошлой планёрки: {today_pct}% ({_counts(done, partial, failed)} из {assessed})"
-            if unmentioned:
-                head += f", ❓ {unmentioned} не разобрали"
-            body.append(head)
-            # Per-person, one compact line; people whose tasks weren't discussed
-            # are skipped (no score, no noise).
-            grouped: Dict[str, List[Dict[str, Any]]] = {}
-            order = []
-            for s in statuses:
-                kind, names = _classify(s.get("assignee"))
-                who = _person(names[0], roster_firsts) if kind == "items" else "Не указано"
-                if who not in grouped:
-                    grouped[who] = []
-                    order.append(who)
-                grouped[who].append(s)
-            for who in order:
-                tasks = grouped[who]
-                a_done = sum(1 for t in tasks if st(t) == "выполнено")
-                a_partial = sum(1 for t in tasks if st(t) == "частично")
-                a_assessed = len(tasks) - sum(1 for t in tasks if st(t) == "не упоминалось")
-                pct = _fair_pct(a_done, a_partial, a_assessed)
-                if pct is None:
-                    continue
-                body.append(
-                    f"  {who} {pct}% "
-                    f"({_counts(a_done, a_partial, a_assessed - a_done - a_partial)})"
-                )
-
-    if not body:
-        return []
-    return ["✅ ЗАДАЧИ"] + body
-
-
-def _trends_lines(
-    data: Dict[str, Any],
-    statuses: List[Dict[str, Any]],
-    prior_stats: List[Dict[str, Any]],
-) -> List[str]:
-    """📈 One dense line: score / manager talk-share / completion over time."""
-    parts: List[str] = []
-    score = (data.get("effectiveness") or {}).get("score")
-    prior_scores = [s.get("score") for s in prior_stats if s.get("score")]
-    if score and prior_scores:
-        chain = "→".join(str(int(s)) for s in prior_scores[-2:] + [score])
-        parts.append(f"Оценка {chain}{_arrow(score, prior_scores[-1])}")
-
-    today_talk = (data.get("talk_share") or {}).get("manager_pct")
-    prior_talk = [e.get("manager_pct") for e in prior_stats if e.get("manager_pct")]
-    if today_talk and prior_talk:
-        parts.append(
-            f"Доля рук. {int(prior_talk[-1])}→{int(today_talk)}%"
-            f"{_arrow(today_talk, prior_talk[-1])}"
-        )
-
-    history = [s for s in prior_stats if _entry_pct(s) is not None and s.get("date")]
-    today_pct = _today_completion(statuses)
-    if history and today_pct is not None:
-        pcts = [_entry_pct(e) for e in history] + [today_pct]
-        chain = "→".join(str(p) for p in pcts[-3:])
-        parts.append(f"Выполнение {chain}%{_arrow(today_pct, pcts[-2])}")
-
-    if not parts:
-        return []
-    return ["📈 ТРЕНДЫ", " · ".join(parts)]
-
-
-def _recurring_lines(data: Dict[str, Any]) -> List[str]:
-    """🔁 Cross-meeting recurring problems, severity-sorted, one line each."""
-    points = [
-        p for p in data.get("attention_points") or []
-        if isinstance(p, dict) and _has_text(p.get("point")) and p.get("recurring")
+    # Accountants who didn't voice a plan for the day.
+    no_plan = [
+        _person(e.get("name"), roster_firsts)
+        for e in breakdown
+        if e.get("participated") and _real_count(e.get("today_plan")) == 0
     ]
-    if not points:
+    if no_plan:
+        tips.append(f"Попросить озвучивать план на день: {', '.join(no_plan)}")
+
+    # People who keep staying silent.
+    silent = [e for e in breakdown if not e.get("participated")]
+    if silent:
+        misses, total = _attendance_misses(data, prior_stats, roster_firsts)
+        chronic = [
+            _person(e.get("name"), roster_firsts)
+            for e in silent
+            if total >= 2 and misses.get(_person(e.get("name"), roster_firsts), 0) >= 2
+        ]
+        names = chronic or [_person(e.get("name"), roster_firsts) for e in silent]
+        tips.append(f"Вовлечь в обсуждение: {', '.join(names)}")
+
+    # Manager dominates the conversation.
+    manager_pct = (data.get("talk_share") or {}).get("manager_pct")
+    if manager_pct and manager_pct >= 70:
+        tips.append(f"Дать бухгалтерам больше говорить (руководитель {int(manager_pct)}%)")
+
+    # No praise at all — motivation matters.
+    if _criterion_status(data, 4) == "не выполнено":
+        tips.append("Отметить хорошую работу кого-то из команды")
+
+    if not tips:
         return []
-    severity_rank = {"high": 0, "medium": 1, "low": 2}
-    points.sort(key=lambda p: severity_rank.get(_clean(p.get("severity")).lower(), 1))
-    out = ["🔁 ПОВТОРЯЕТСЯ"]
-    for p in points:
-        icon = _SEVERITY_ICONS.get(_clean(p.get("severity")).lower(), "🟡")
-        out.append(f"{icon} {_clean(p.get('point'))}")
-    return out
+    return ["💡 УЛУЧШИТЬ НА СЛЕДУЮЩЕЙ"] + [f"– {tip}" for tip in tips]
 
 
 def _analytics_block(
@@ -759,28 +665,28 @@ def _analytics_block(
     roster_firsts: set,
     manager: str = "",
 ) -> List[str]:
-    """Compact analytics (delivered as a separate Telegram message): workload &
-    engagement per accountant, tasks, trends and recurring problems.
+    """Compact meeting-effectiveness analytics (separate Telegram message).
 
-    Every fact (who carried which clients, task statuses) is the AI's; every
-    NUMBER (counts, percents, trends) is computed here, so it can't be invented.
-    Sections with no data are dropped, so a thin meeting yields a short message.
+    Its only goal is to make the planёрка itself run better, so it shows three
+    things and nothing else: how the manager facilitates the meeting, whether
+    the accountants set themselves tasks (and how concretely), and concrete
+    fixes for next time. Workload-per-client and company-level problems were
+    dropped on purpose — they are about running the company, not the meeting.
+
+    Every fact is the AI's (from the transcript); every NUMBER (counts, streaks,
+    trends) is computed here. Sections with no data are dropped.
     """
-    statuses = [
-        s for s in data.get("previous_tasks_status") or [] if _clean(s.get("task"))
-    ]
     prior_stats = prior_stats or []
-    history = [s for s in prior_stats if _entry_pct(s) is not None and s.get("date")]
     breakdown = _roster_breakdown(data, roster_firsts, manager)
-    if not statuses and not history and not breakdown:
+    has_criteria = bool((data.get("effectiveness") or {}).get("criteria"))
+    if not has_criteria and not breakdown:
         return []
 
     sections = [
-        _engagement_lines(data, breakdown, prior_stats, roster_firsts),
-        _workload_lines(breakdown, prior_stats, roster_firsts),
-        _tasks_lines(data, statuses, prior_stats, roster_firsts),
-        _trends_lines(data, statuses, prior_stats),
-        _recurring_lines(data),
+        _score_line(data, prior_stats),
+        _manager_conduct_lines(data, prior_stats),
+        _accountant_tasks_lines(data, breakdown, roster_firsts),
+        _improve_lines(data, breakdown, prior_stats, roster_firsts),
     ]
     out: List[str] = []
     for section in sections:
