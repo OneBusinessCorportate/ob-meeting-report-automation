@@ -202,7 +202,7 @@ def test_tasks_grouped_by_assignee():
     assert "👤 Оля:\n1. Подготовить договор с Бета. Срок: 2026-06-15" in block
 
 
-def test_analytics_block_with_completion_rates_and_trends():
+def test_analytics_tasks_completion_and_trends():
     data = {
         "effectiveness": {"score": 7, "criteria": []},
         "previous_tasks_status": [
@@ -219,12 +219,11 @@ def test_analytics_block_with_completion_rates_and_trends():
     }
     prior_stats = [
         {"date": "2026-06-10", "score": 5, "tasks_done": 1, "tasks_total": 4,
-         "per_assignee": {"Оля": {"done": 0, "total": 2}},
-         "has_participation": True, "absent": ["Аваг", "Артак"], "manager_pct": 80},
+         "per_assignee": {}, "has_participation": True,
+         "absent": ["Аваг", "Артак"], "manager_pct": 80},
         {"date": "2026-06-11", "score": 6, "tasks_done": 0, "tasks_total": 3,
-         "per_assignee": {"Оля": {"done": 0, "total": 1},
-                          "Наира Мхитарян": {"done": 0, "total": 2}},
-         "has_participation": True, "absent": ["Аваг"], "manager_pct": 75},
+         "per_assignee": {}, "has_participation": True, "absent": ["Аваг"],
+         "manager_pct": 75},
     ]
     roster = ROSTER + [
         {"name": "Наира Мхитарян", "role": "бухгалтер"},
@@ -234,7 +233,7 @@ def test_analytics_block_with_completion_rates_and_trends():
     data["talk_share"] = {"manager_pct": 70, "accountants_pct": 30}
     data["participant_breakdown"] = [
         {"name": "Аваг", "participated": False},
-        {"name": "Оля", "participated": True},
+        {"name": "Оля", "participated": True, "cases": ["X"], "today_plan": ["y"]},
     ]
     text = render_telegram_report(
         data, meeting_date="2026-06-12", team_roster=roster, prior_stats=prior_stats
@@ -244,37 +243,16 @@ def test_analytics_block_with_completion_rates_and_trends():
     assert text.index("📈 АНАЛИТИКА") > text.index("❓ ОТКРЫТЫЕ ВОПРОСЫ")
     # Fair team score: «частично» = half a point, the unmentioned task is NOT
     # counted against anyone — 3 assessed: 1 done + 0.5 partial -> 50%.
-    assert ("Задачи с прошлой планёрки: 50% (✅ 1, 🟡 1, ❌ 1 из 3 обсуждённых; "
-            "❓ 1 не обсуждались)") in text
-    # Personal trend against the person's own previous result.
-    assert "👤 Оля: 50% (✅ 1, 🟡 1, ❌ 1 из 3), прошлая планёрка 0% ↗️" in text
-    assert "  ✅ Отправить платежное поручение. — сказала, что отправила" in text
-    assert "  ❌ Заключить договор с Бета." in text
-    assert "  🟡 Проверить банковские коды." in text
-    # Наира's only task was not discussed: no 0%, a neutral line instead.
-    assert "👤 Наира: задачи на встрече не обсуждались" in text
-    assert "Наира: 0%" not in text
-    assert "  ❓ Подготовить список клиентов с оборотом 200 млн." in text
-    # Completion trend across stand-ups + the script-computed average.
-    assert "Динамика выполнения задач:\n  10.06: 25%\n  11.06: 0%\n  сегодня: 50% ↗️" in text
-    assert "среднее за 3 планёрки(ок): 25%" in text
-    # Attendance: misses over the window (2 prior + today).
-    assert "Пропуски за последние 3 планёрки(ок):" in text
-    assert "  Аваг: 3 из 3" in text
-    assert "  Артак: 1 из 3" in text
-    # Manager talk-share trend and score chain.
-    assert "Доля руководителя в разговоре: 75% → 70% ↘️" in text
-    assert "Оценка встречи: 5 → 6 → 7 из 10 ↗️" in text
-    # Good news first, then softly-worded signals.
-    assert "🏆 ПРОГРЕСС" in text
-    assert "  – Оля: рост с 0% до 50% 📈" in text
-    assert "  – Команда: выполнение задач выросло с 0% до 50%" in text
-    assert text.index("🏆 ПРОГРЕСС") < text.index("❗ СИГНАЛЫ")
-    assert "❗ СИГНАЛЫ" in text
-    assert ("  – Задачи без статуса (❓ 1) — о них никто не спросил на встрече; "
-            "стоит пройтись по ним на следующей планёрке.") in text
-    assert ("  – Аваг не участвует в планёрках (3 из 3) — стоит уточнить "
-            "причину (возможно, отпуск или другой график).") in text
+    assert "С прошлой планёрки: 50% (✅ 1, 🟡 1, ❌ 1 из 3), ❓ 1 не разобрали" in text
+    # Per-person, one compact line (no per-task wall); Наира's task wasn't
+    # discussed, so she is omitted entirely.
+    assert "  Оля 50% (✅ 1, 🟡 1, ❌ 1)" in text
+    assert "Наира" not in text.split("✅ ЗАДАЧИ")[1].split("📈 ТРЕНДЫ")[0]
+    # One dense trends line: score chain, manager talk-share, completion.
+    assert "📈 ТРЕНДЫ" in text
+    assert "Оценка 5→6→7↗" in text
+    assert "Доля рук. 75→70%↘" in text
+    assert "Выполнение 25→0→50%↗" in text
 
 
 def test_analytics_block_skipped_without_data():
@@ -288,52 +266,57 @@ def test_analytics_block_skipped_without_data():
     assert "АНАЛИТИКА" not in text
 
 
-def test_analytics_workload_and_engagement_section():
-    text = render_analytics_message(
-        FULL_DATA, meeting_date="2026-06-12", team_roster=ROSTER
-    )
-    block = text.split("👥 ЗАГРУЗКА И ВОВЛЕЧЁННОСТЬ")[1]
-    # Engagement: who spoke vs who stayed silent (manager excluded).
-    assert "Высказались: 2 из 3 (молчали: Тагуи)" in block
-    assert "Кто сколько говорил: 70% руководитель, 30% бухгалтеры" in block
-    # Per-person load: client count (Russian plural) + planned tasks; Оля has a
-    # real blocker, so it is flagged. Стелла has no cases and no plan.
-    assert "👤 Оля — 0 клиентов, 2 задачи на сегодня, ⛔ 1 блокер" in block
-    assert "👤 Стелла — 0 клиентов, 0 задач на сегодня" in block
-
-
-def test_analytics_workload_sorted_by_load_with_plurals_and_trend():
+def test_analytics_engagement_line_and_silent_streak():
     data = {
-        "talk_share": {"manager_pct": 50, "accountants_pct": 50},
+        "talk_share": {"manager_pct": 55, "accountants_pct": 45},
+        "participant_breakdown": [
+            {"name": "Оля", "participated": True, "cases": ["A"], "today_plan": []},
+            {"name": "Стелла", "participated": True, "cases": ["A"], "today_plan": []},
+            {"name": "Аваг", "participated": False},
+        ],
+    }
+    prior = [{"date": "2026-06-11", "score": 6, "has_participation": True,
+              "absent": ["Аваг"], "manager_pct": 60}]
+    roster = ROSTER + [{"name": "Аваг", "role": "бухгалтер"}]
+    text = render_analytics_message(
+        data, meeting_date="2026-06-12", team_roster=roster, prior_stats=prior
+    )
+    # Compact title with dd.mm; one engagement line; silent person with streak.
+    assert text.startswith("📊 Аналитика планёрки · 12.06")
+    assert "Высказались 2/3 · говорили 55% рук. / 45% бух." in text
+    assert "Молчали: Аваг (2-ю подряд)" in text  # absent prior + today
+
+
+def test_analytics_workload_compact_sorted_with_plurals_and_trend():
+    data = {
         "participant_breakdown": [
             {"name": "Оля", "participated": True,
              "cases": ["A", "B", "C", "D", "E", "F"], "today_plan": ["x"]},
             {"name": "Стелла", "participated": True, "cases": ["A"], "today_plan": []},
-            {"name": "Тагуи", "participated": True,
-             "cases": ["A", "B"], "today_plan": ["x", "y"],
-             "needs_help": "нужна рука", "question_to_manager": "когда дедлайн?"},
-            {"name": "Эмилия", "participated": True, "cases": []},
+            {"name": "Тагуи", "participated": True, "cases": ["A", "B"],
+             "today_plan": ["x", "y"], "blockers": ["завис банк"], "needs_help": "нужна рука"},
+            {"name": "Эмилия", "participated": True, "cases": []},  # manager, excluded
+            {"name": "Лилит", "participated": True, "cases": [], "today_plan": []},  # no load, skipped
         ],
     }
-    prior = [{"date": "2026-06-11", "score": 6, "tasks_done": 0, "tasks_total": 0,
-              "per_assignee": {}, "has_participation": True, "absent": [],
+    prior = [{"date": "2026-06-11", "has_participation": True, "absent": [],
               "workload": {"Оля": 4, "Стелла": 1}, "manager_pct": 60}]
     text = render_analytics_message(
         data, meeting_date="2026-06-12", team_roster=ROSTER, prior_stats=prior
     )
-    block = text.split("👥 ЗАГРУЗКА И ВОВЛЕЧЁННОСТЬ")[1]
-    # Heaviest client load first; plural agreement (6 клиентов / 2 клиента / 1 клиент).
-    assert "👤 Оля — 6 клиентов ↗️, 1 задача на сегодня" in block
-    assert "👤 Тагуи — 2 клиента, 2 задачи на сегодня, 🆘 нужна помощь, ❓ вопрос руководителю" in block
-    assert "👤 Стелла — 1 клиент" in block  # unchanged load -> no trend arrow
-    assert text.index("👤 Оля") < text.index("👤 Тагуи") < text.index("👤 Стелла")
-    # Оля's load grew 4 -> 6, so a rising trend arrow is shown; Стелла's didn't.
-    assert "1 клиент," in block and "1 клиент ↗️" not in block
+    block = text.split("👥 НАГРУЗКА · клиенты / задачи")[1]
+    # «name clients / tasks», heaviest first; ↗ when load grew; ⛔/🆘 flags.
+    assert "Оля 6↗ / 1" in block
+    assert "Тагуи 2 / 2 ⛔ 🆘" in block
+    assert "Стелла 1 / 0" in block  # load unchanged (1 -> 1) -> no arrow
+    assert "Эмилия" not in block  # manager excluded
+    assert "Лилит" not in block   # spoke but no clients/tasks -> skipped
+    assert text.index("Оля 6") < text.index("Тагуи 2") < text.index("Стелла 1")
 
 
-def test_analytics_new_tasks_section():
+def test_analytics_new_tasks_one_line():
     data = {
-        "participant_breakdown": [{"name": "Оля", "participated": True}],
+        "participant_breakdown": [{"name": "Оля", "participated": True, "cases": ["A"]}],
         "action_items": [
             {"text": "Задача 1", "assignee": "Оля"},
             {"text": "Задача 2", "assignee": "Оля"},
@@ -342,52 +325,43 @@ def test_analytics_new_tasks_section():
     }
     roster = ROSTER + [{"name": "Наира Мхитарян", "role": "бухгалтер"}]
     text = render_analytics_message(data, meeting_date="2026-06-12", team_roster=roster)
-    assert "Новых задач поставлено сегодня: 3" in text
-    assert "Оля — 2; Наира — 1" in text
+    assert "Поставлено сегодня: 3 задачи (Оля 2, Наира 1)" in text
 
 
-def test_analytics_unmentioned_prev_tasks_listed_compactly():
+def test_analytics_unmentioned_prev_tasks_one_line():
     data = {
-        "participant_breakdown": [{"name": "Оля", "participated": True}],
+        "participant_breakdown": [{"name": "Оля", "participated": True, "cases": ["A"]}],
         "previous_tasks_status": [
             {"task": "Закрыть Golden Trade", "assignee": "Лилит", "status": "не упоминалось"},
             {"task": "Письмо Армен Строй", "assignee": "Тагуи", "status": "не упоминалось"},
         ],
     }
-    prior = [{"date": "2026-03-26", "score": 5, "tasks_done": 0, "tasks_total": 0,
-              "per_assignee": {}, "has_participation": True, "absent": []}]
+    prior = [{"date": "2026-03-26", "score": 5, "has_participation": True, "absent": []}]
     roster = ROSTER + [{"name": "Лилит", "role": "бухгалтер"}]
     text = render_analytics_message(
         data, meeting_date="2026-06-12", team_roster=roster, prior_stats=prior
     )
-    # One compact line + the pending tasks listed once (no per-person spam).
-    assert ("Задачи с прошлой планёрки (26.03) сегодня не разбирали (❓ 2) — "
-            "стоит свериться по ним:") in text
-    assert "  ❓ Закрыть Golden Trade (Лилит)" in text
-    assert "  ❓ Письмо Армен Строй (Тагуи)" in text
-    assert "задачи на встрече не обсуждались" not in text  # no per-person headers
-    # A single, non-duplicated signal about the untouched tasks.
-    assert text.count("Ни одна из 2 задач прошлой планёрки") == 1
-    assert "Задачи без статуса" not in text
+    # Just the count + a ⚠️ marker — no per-task wall, no per-person spam.
+    assert "С прошлой планёрки (26.03) не разобрали 2 задачи ⚠️" in text
+    assert "Golden Trade" not in text
+    assert "задачи на встрече не обсуждались" not in text
 
 
 def test_analytics_recurring_problems_section():
     data = {
-        "participant_breakdown": [{"name": "Оля", "participated": True}],
+        "participant_breakdown": [{"name": "Оля", "participated": True, "cases": ["A"]}],
         "attention_points": [
             {"point": "Налоговая ответственность не ясна", "severity": "high",
              "recurring": True, "suggested_follow_up": "Позвать юриста"},
-            {"point": "Передача дел", "severity": "medium", "recurring": True,
-             "suggested_follow_up": ""},
-            {"point": "Разовая проблема", "severity": "high", "recurring": False,
-             "suggested_follow_up": "x"},
+            {"point": "Передача дел", "severity": "medium", "recurring": True},
+            {"point": "Разовая проблема", "severity": "high", "recurring": False},
         ],
     }
     text = render_analytics_message(data, meeting_date="2026-06-12", team_roster=ROSTER)
-    block = text.split("🔁 ПОВТОРЯЮЩИЕСЯ ПРОБЛЕМЫ")[1]
-    # Only recurring points, severity-sorted (high before medium), with follow-up.
+    block = text.split("🔁 ПОВТОРЯЕТСЯ")[1]
+    # Only recurring points, severity-sorted, one tight line each (no follow-up wall).
     assert "🔴 Налоговая ответственность не ясна" in block
-    assert "  Что сделать: Позвать юриста" in block
+    assert "Что сделать" not in block
     assert "🟡 Передача дел" in block
     assert "Разовая проблема" not in block  # recurring=false is excluded
     assert block.index("🔴") < block.index("🟡")
@@ -405,14 +379,14 @@ def test_include_analytics_false_drops_block_for_separate_message():
         data, meeting_date="2026-06-12", team_roster=ROSTER, include_analytics=False
     )
     assert "📈 АНАЛИТИКА" not in report
-    # The standalone analytics message carries the same block under its header.
+    # The standalone analytics message carries the same block under its title.
     analytics = render_analytics_message(
         data, meeting_date="2026-06-12", team_roster=ROSTER
     )
-    assert analytics.startswith("📊 Аналитика планёрки")
-    assert "2026-06-12" in analytics
-    assert "📈 АНАЛИТИКА" in analytics
-    assert "👤 Оля: 100%" in analytics
+    assert analytics.startswith("📊 Аналитика планёрки · 12.06")
+    assert "✅ ЗАДАЧИ" in analytics
+    assert "С прошлой планёрки: 100% (✅ 1 из 1)" in analytics
+    assert "  Оля 100% (✅ 1)" in analytics
 
 
 def test_analytics_message_empty_when_no_dynamics():

@@ -798,8 +798,9 @@ def test_deliver_rerenders_stored_report_with_current_template():
     assert len(session.calls) == 2
     analytics = session.calls[1]["text"]
     assert analytics.startswith("📊 Аналитика планёрки")
-    assert "👥 ЗАГРУЗКА И ВОВЛЕЧЁННОСТЬ" in analytics
-    assert "👤 Стелла — 0 клиентов, 0 задач на сегодня" in analytics
+    # Стелла spoke but carried no clients/tasks, so the engagement line is the
+    # signal here (she is not listed under workload — that would be noise).
+    assert "Высказались 1/1" in analytics
 
 
 def test_deliver_sends_analytics_as_separate_message():
@@ -846,10 +847,10 @@ def test_deliver_sends_analytics_as_separate_message():
     report_msg, analytics_msg = session.calls[0]["text"], session.calls[1]["text"]
     assert "👤 Оля" in report_msg
     assert "📈 АНАЛИТИКА" not in report_msg  # analytics moved out of the report
-    assert analytics_msg.startswith("📊 *Аналитика планёрки*") or \
-        analytics_msg.startswith("📊 Аналитика планёрки")
-    assert "📈 АНАЛИТИКА" in analytics_msg
-    assert "👤 Оля: 100%" in analytics_msg
+    assert analytics_msg.startswith("📊 Аналитика планёрки")
+    assert "✅ ЗАДАЧИ" in analytics_msg
+    assert "С прошлой планёрки: 100% (✅ 1 из 1)" in analytics_msg
+    assert "  Оля 100% (✅ 1)" in analytics_msg
 
 
 def test_telegram_sends_converted_bold():
