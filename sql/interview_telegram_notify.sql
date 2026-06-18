@@ -52,7 +52,8 @@ begin
     select i.id, c.full_name, i.interview_type, i.call_url,
            a.recommendation, s.overall_score, a.summary,
            a.candidate_strengths, a.candidate_weaknesses, a.next_steps, a.reasoning,
-           -- 5 thesis scores (Тезисы 1–5) for the per-candidate breakdown line.
+           -- Detailed per-thesis evaluation (id/title/score/comment) + flat scores.
+           a.theses,
            s.knowledge_score, s.skills_score, s.responsibility_score,
            s.resilience_score, s.communication_score,
            i.updated_at
@@ -65,12 +66,25 @@ begin
   )
   select count(*),
     string_agg(
-      -- One compact line with the 5 thesis scores, shown for every candidate.
-      ( '🧩 Тезисы: Знания '   || coalesce(knowledge_score::text,'—')
-        || ' · Опыт/ArmSoft '  || coalesce(skills_score::text,'—')
-        || ' · Ответств. '     || coalesce(responsibility_score::text,'—')
-        || ' · Стрессоуст. '   || coalesce(resilience_score::text,'—')
-        || ' · Коммуник. '     || coalesce(communication_score::text,'—') ) ||
+      -- ADDED on top of the previous block: detailed «Оценка по 5 тезисам»
+      -- (one line per thesis with its score and comment) from a.theses. Older
+      -- interviews without theses fall back to the compact one-line summary.
+      coalesce(
+        nullif(
+          '🧩 Оценка по 5 тезисам:' || E'\n' ||
+          (select string_agg(
+              (e->>'id') || '. ' || coalesce(e->>'title','') || ' — '
+              || coalesce(e->>'score','—') || '/10'
+              || coalesce(': ' || nullif(left(e->>'comment',90),''),''),
+              E'\n' order by (e->>'id')::int)
+           from jsonb_array_elements(coalesce(theses,'[]'::jsonb)) e),
+          '🧩 Оценка по 5 тезисам:' || E'\n'),  -- empty theses -> use fallback
+        '🧩 Тезисы: Знания '   || coalesce(knowledge_score::text,'—')
+          || ' · Опыт/ArmSoft '|| coalesce(skills_score::text,'—')
+          || ' · Ответств. '   || coalesce(responsibility_score::text,'—')
+          || ' · Стрессоуст. ' || coalesce(resilience_score::text,'—')
+          || ' · Коммуник. '   || coalesce(communication_score::text,'—')
+      ) ||
       case when recommendation = 'hire' then
         -- Hired: fuller block.
         E'\n' || '✅ ' || full_name || ' — ' || coalesce(interview_type,'—') || E'\n'
