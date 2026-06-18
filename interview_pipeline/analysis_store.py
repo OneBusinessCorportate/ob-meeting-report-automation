@@ -266,6 +266,7 @@ class InterviewStore:
         candidate_weaknesses: Optional[list] = None,
         red_flags: Optional[list] = None,
         next_steps: Optional[list] = None,
+        theses: Optional[list] = None,
         recommendation: Optional[str] = None,
         reasoning: Optional[str] = None,
         ai_metadata: Optional[dict] = None,
@@ -289,6 +290,7 @@ class InterviewStore:
                 "candidate_weaknesses": candidate_weaknesses,
                 "red_flags": red_flags,
                 "next_steps": next_steps,
+                "theses": theses,
                 "recommendation": recommendation,
                 "reasoning": reasoning,
                 "ai_metadata": ai_metadata,
@@ -359,21 +361,26 @@ class InterviewStore:
         analysis_id: str,
         interview_id: str,
         candidate_id: Optional[str],
-        communication_score: Optional[int],
-        professional_score: Optional[int],
-        motivation_score: Optional[int],
-        overall_score: Optional[int],
+        knowledge_score: Optional[int] = None,
+        skills_score: Optional[int] = None,
+        responsibility_score: Optional[int] = None,
+        resilience_score: Optional[int] = None,
+        communication_score: Optional[int] = None,
+        overall_score: Optional[int] = None,
         score_scale: str = "0-10",
     ) -> Dict[str, Any]:
+        # The five thesis scores (Тезисы 1–5) + the overall score.
         payload = _drop_none(
             {
                 "analysis_id": analysis_id,
                 "interview_id": interview_id,
                 "candidate_id": candidate_id,
                 "score_scale": score_scale,
+                "knowledge_score": knowledge_score,
+                "skills_score": skills_score,
+                "responsibility_score": responsibility_score,
+                "resilience_score": resilience_score,
                 "communication_score": communication_score,
-                "professional_score": professional_score,
-                "motivation_score": motivation_score,
                 "overall_score": overall_score,
             }
         )

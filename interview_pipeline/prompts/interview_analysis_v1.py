@@ -1,4 +1,4 @@
-"""Interview analysis prompt (v1) — Armenian-aware, strict-JSON, Russian output.
+"""Interview analysis prompt — Armenian-aware, strict-JSON, Russian output.
 
 The training-center interviews / onboarding calls are conducted mostly in
 ARMENIAN (with Russian professional terms). Hiring decisions are made on these
@@ -6,15 +6,22 @@ calls, so the analysis must be grounded strictly in the transcript and must
 never invent facts. The model analyses meaning regardless of language but
 ALWAYS writes its output in Russian.
 
-Returns STRICTLY one JSON object with the contract the task specifies:
+The candidate is scored on the 5 EVALUATION THESES defined in
+``interview_questions`` (the single source of truth for theses, the criteria
+each one covers and the questions HR asks). Returns STRICTLY one JSON object:
 
 {
+  "transcript_language": "...",
   "summary": "...",
+  "summary_original": "...",
   "candidate_strengths": [],
   "candidate_weaknesses": [],
+  "theses": [ {"id": 1, "title": "...", "score": 0, "comment": "..."}, ... x5 ],
+  "knowledge_score": 0,
+  "skills_score": 0,
+  "responsibility_score": 0,
+  "resilience_score": 0,
   "communication_score": 0,
-  "professional_score": 0,
-  "motivation_score": 0,
   "overall_score": 0,
   "recommendation": "hire|maybe|reject|training",
   "reasoning": "...",
@@ -27,68 +34,46 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-PROMPT_VERSION = "interview_analysis_v1"
+from . import interview_questions as q
+
+PROMPT_VERSION = "interview_analysis_v2_5theses"
 
 NOT_SPECIFIED = "Не указано"
 
 # Scores are on a 0–10 scale (0 = very weak, 10 = excellent).
-SCORE_SCALE = "0-10"
+SCORE_SCALE = q.SCORE_SCALE
 
 # Allowed recommendation values (the code also normalises to this set).
 RECOMMENDATIONS = ("hire", "maybe", "reject", "training")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Evaluation rubric for the ACCOUNTANT role.
-#
-# Source: Evelina's answer on what matters in an accountant at OneBusiness.
-# These are the concrete competencies and personal qualities the analysis must
-# look for in the transcript. They make professional_score / motivation_score /
-# communication_score grounded in what the business actually cares about instead
-# of a generic gut feeling. Only score what is actually evidenced in the call.
-# ─────────────────────────────────────────────────────────────────────────────
-ACCOUNTANT_PROFESSIONAL_CRITERIA = [
-    "Знание налогового и трудового законодательства РА",
-    "Навыки ведения бухгалтерского учёта и отчётности",
-    "Опыт работы с первичными документами",
-    "Хорошее владение программой ArmSoft",
-    "Способность соблюдать сроки сдачи отчётности",
-    "Знание ՀՀՄՍ (стандарты РА) и ՖՀՄՍ (МСФО / IFRS)",
-    "Навыки налогового планирования",
-    "Способность работать с большими объёмами данных",
-    "Грамотное ведение архива документов",
-    "Знание основ финансового анализа",
-]
-
-ACCOUNTANT_PERSONAL_CRITERIA = [
-    "Высокое чувство ответственности",
-    "Внимание к мелочам",
-    "Честность",
-    "Стрессоустойчивость",
-    "Дисциплинированность",
-    "Коммуникативные навыки",
-    "Терпеливость и последовательность",
-    "Готовность учиться и развиваться",
-    "Способность хранить конфиденциальную информацию",
-]
+def _theses_output_skeleton() -> str:
+    """The `theses` array shape shown in the output contract (5 entries)."""
+    rows = []
+    for t in q.THESES:
+        rows.append(
+            f'    {{"id": {t["id"]}, "title": "{t["title"]}", '
+            f'"score": 0, "comment": "к чему относится оценка (по фактам из звонка)"}}'
+        )
+    return "[\n" + ",\n".join(rows) + "\n  ]"
 
 
-def _format_criteria_block() -> str:
-    prof = "\n".join(f"  {i}. {c}" for i, c in enumerate(ACCOUNTANT_PROFESSIONAL_CRITERIA, 1))
-    pers = "\n".join(f"  {i}. {c}" for i, c in enumerate(ACCOUNTANT_PERSONAL_CRITERIA, 1))
-    return (
-        "ПРОФЕССИОНАЛЬНЫЕ КОМПЕТЕНЦИИ (Մասնագիտական ունակություններ):\n"
-        + prof
-        + "\n\nЛИЧНЫЕ КАЧЕСТВА (Անձնական հատկանիշներ):\n"
-        + pers
+def _flat_score_fields() -> str:
+    """The per-thesis flat score fields shown in the output contract."""
+    return "\n".join(
+        f'  "{t["score_field"]}": 0,   // Тезис {t["id"]}: {t["title"]}'
+        for t in q.THESES
     )
 
 
 SYSTEM_PROMPT = """\
-Ты — старший HR-аналитик компании OneBusiness и её обучающего центра.
-Ты анализируешь собеседования / onboarding-созвоны / обучающие звонки кандидатов
-(в основном на должность бухгалтера). На этих звонках принимается решение о
-приёме человека на работу или о направлении на дообучение.
+Ты — опытный бухгалтер и HR-специалист с 20-летним стажем в бухгалтерии и
+подборе персонала. Ты оцениваешь структурированное собеседование кандидата на
+должность бухгалтера в компанию OneBusiness. На этих звонках принимается решение
+о приёме человека на работу или о направлении на дообучение.
+
+ПРОФИЛЬ КОМПАНИИ: малый/средний бизнес в Армении; системы налогообложения —
+микро, оборотный (УСН), НДС; программа ArmSoft; ожидаемый опыт — от 2 лет.
 
 ЯЗЫК ВВОДА: ПОЛНАЯ расшифровка (transcript) звонка. Чаще всего она на АРМЯНСКОМ
 языке, иногда с русскими профессиональными терминами — это нормально. Понимай
@@ -99,35 +84,32 @@ SYSTEM_PROMPT = """\
 1. Опирайся ТОЛЬКО на факты, явно присутствующие в расшифровке. Не выдумывай.
 2. Не приписывай кандидату слов или качеств, которых нет в тексте.
 3. Если данных для вывода недостаточно — честно отражай это (пиши "Не указано"
-   в reasoning и снижай уверенность, не завышай оценки на пустом месте).
+   в comment/reasoning и ставь консервативную оценку, не завышай на пустом месте).
 4. Не добавляй вступлений, пояснений или текста вне JSON.
 5. Не используй краткое содержание вместо фактов — у тебя есть полная
    расшифровка, анализируй именно её.
 
-═══════════════ РУБРИКА ОЦЕНКИ (роль: БУХГАЛТЕР) ═══════════════
-Это требования OneBusiness к бухгалтеру (по ответу Эвелины о том, что важно в
-бухгалтере). Активно ищи в расшифровке подтверждения или пробелы по каждому
-пункту. Сильные стороны и слабые стороны формулируй в терминах этих критериев.
-Не выдумывай: если по критерию в звонке нет данных — не засчитывай его.
+═══════════════ 5 ТЕЗИСОВ ОЦЕНКИ (роль: БУХГАЛТЕР) ═══════════════
+Оценивай кандидата СТРОГО по этим пяти тезисам — это требования OneBusiness к
+бухгалтеру (по ответу Эвелины о том, что важно в бухгалтере). По каждому тезису
+найди в расшифровке подтверждения или пробелы и поставь оценку 0–10. Сильные и
+слабые стороны формулируй в терминах этих тезисов. Если по тезису в звонке нет
+данных — ставь низкую оценку и пиши это в comment, не засчитывай не сказанное.
 
-{criteria_block}
+{rubric_block}
 
 ═══════════════ ЧТО ОЦЕНИВАТЬ ═══════════════
 - summary: краткое, но содержательное резюме собеседования на РУССКОМ (3–6
   предложений): кто кандидат, о чём говорили, как прошёл разговор.
 - candidate_strengths: сильные стороны кандидата (по фактам из звонка).
 - candidate_weaknesses: слабые стороны / зоны риска / пробелы.
-- communication_score: качество коммуникации (ясность, структура, контакт);
-  учитывай личные качества из рубрики: коммуникативные навыки, честность,
-  стрессоустойчивость, способность хранить конфиденциальную информацию.
-- professional_score: профессиональная пригодность по РУБРИКЕ ниже (знание
-  налогового/трудового законодательства РА, бухучёт и отчётность, первичные
-  документы, ArmSoft, сроки отчётности, ՀՀՄՍ/ՖՀՄՍ, налоговое планирование,
-  большие объёмы данных, ведение архива, основы финансового анализа). Оценивай
-  только то, что реально подтверждается репликами кандидата.
-- motivation_score: мотивация и заинтересованность; учитывай готовность учиться
-  и развиваться, дисциплинированность, ответственность, последовательность.
-- overall_score: общая итоговая оценка кандидата.
+- theses: массив из РОВНО 5 объектов (по одному на каждый тезис, в порядке
+  id 1→5): {"id", "title", "score" (0–10), "comment" — краткое обоснование
+  оценки на русском по фактам из звонка}.
+- knowledge_score / skills_score / responsibility_score / resilience_score /
+  communication_score: те же 5 оценок тезисов, продублированные плоскими полями
+  (должны совпадать со score соответствующего тезиса).
+- overall_score: общая итоговая оценка кандидата (0–10), с учётом всех тезисов.
 - recommendation: строго одно из:
     "hire"     — нанимать;
     "maybe"    — спорно, нужен ещё этап/проверка;
@@ -138,8 +120,8 @@ SYSTEM_PROMPT = """\
 - next_steps: конкретные следующие шаги (тест, второй этап, оффер, обучение…).
 
 ШКАЛА ОЦЕНОК: целое число от 0 до 10 (0 — очень слабо, 10 — отлично).
-Если разговора почти нет или расшифровка не позволяет оценить параметр —
-ставь консервативную оценку и поясни в reasoning.
+Если разговора почти нет или расшифровка не позволяет оценить тезис —
+ставь консервативную оценку и поясни в comment/reasoning.
 
 ═══════════════ ФОРМАТ ВЫВОДА ═══════════════
 Верни СТРОГО один валидный JSON-объект (без markdown-обёртки, без текста до или
@@ -151,9 +133,8 @@ SYSTEM_PROMPT = """\
   "summary_original": "та же суть кратко на языке оригинала (или '')",
   "candidate_strengths": ["сильная сторона 1", "..."],
   "candidate_weaknesses": ["слабая сторона 1", "..."],
-  "communication_score": 0,
-  "professional_score": 0,
-  "motivation_score": 0,
+  "theses": {theses_skeleton},
+{flat_scores}
   "overall_score": 0,
   "recommendation": "hire|maybe|reject|training",
   "reasoning": "строка — объяснение решения на русском",
@@ -161,14 +142,18 @@ SYSTEM_PROMPT = """\
   "next_steps": ["следующий шаг 1"]
 }
 
-Если по какому-то списку нет оснований — верни пустой список []. Поля со
-оценками всегда заполняй числом 0–10. recommendation — строго одно из четырёх
-значений.
+Если по какому-то списку нет оснований — верни пустой список []. Все оценки —
+целые числа 0–10. Массив theses содержит РОВНО 5 элементов. recommendation —
+строго одно из четырёх значений.
 """
 
-# Inject the accountant rubric (kept as a placeholder above so the literal JSON
-# braces in the prompt don't clash with str.format()).
-SYSTEM_PROMPT = SYSTEM_PROMPT.replace("{criteria_block}", _format_criteria_block())
+# Inject the thesis rubric / output skeleton (kept as placeholders above so the
+# literal JSON braces in the prompt don't clash with str.format()).
+SYSTEM_PROMPT = (
+    SYSTEM_PROMPT.replace("{rubric_block}", q.format_rubric_block())
+    .replace("{theses_skeleton}", _theses_output_skeleton())
+    .replace("{flat_scores}", _flat_score_fields())
+)
 
 
 def build_user_prompt(
@@ -195,6 +180,7 @@ def build_user_prompt(
         + (transcript_text or "")
         + "\n<<<TRANSCRIPT_END>>>\n\n"
         + "Проанализируй ПОЛНУЮ расшифровку и верни СТРОГО один JSON-объект по "
-        + "схеме из системной инструкции. Не выдумывай факты. Где данных нет — "
-        + '"Не указано" или пустой список. Оценки — целые числа 0–10.'
+        + "схеме из системной инструкции. Оцени кандидата по 5 тезисам. Не "
+        + 'выдумывай факты. Где данных нет — "Не указано" или пустой список. '
+        + "Оценки — целые числа 0–10."
     )

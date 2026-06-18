@@ -86,9 +86,18 @@ _GOOD_ANALYSIS = json.dumps(
         "summary_original": "...",
         "candidate_strengths": ["опыт в 1С", "ясная речь"],
         "candidate_weaknesses": ["слабый английский"],
+        "theses": [
+            {"id": 1, "title": "Профессиональные знания", "score": 7, "comment": "знает НДС"},
+            {"id": 2, "title": "Практический опыт", "score": 6, "comment": "ArmSoft базово"},
+            {"id": 3, "title": "Ответственность", "score": 8, "comment": "перепроверяет"},
+            {"id": 4, "title": "Стрессоустойчивость", "score": 9, "comment": "спокойна"},
+            {"id": 5, "title": "Коммуникация", "score": 8, "comment": "ясная речь"},
+        ],
+        "knowledge_score": 7,
+        "skills_score": 6,
+        "responsibility_score": 8,
+        "resilience_score": 9,
         "communication_score": 8,
-        "professional_score": 7,
-        "motivation_score": 9,
         "overall_score": 8,
         "recommendation": "hire",
         "reasoning": "Хорошие знания и мотивация.",
@@ -229,6 +238,14 @@ def test_analyzer_parses_and_normalizes():
     assert res.recommendation == "hire"
     assert res.overall_score == 8
     assert "опыт в 1С" in res.candidate_strengths
+    # 5 theses parsed in order, scores mapped to the flat fields.
+    assert [t["id"] for t in res.theses] == [1, 2, 3, 4, 5]
+    assert res.knowledge_score == 7
+    assert res.skills_score == 6
+    assert res.responsibility_score == 8
+    assert res.resilience_score == 9
+    assert res.communication_score == 8
+    assert res.theses[0]["comment"] == "знает НДС"
 
 
 def test_analyzer_invalid_json_fails_gracefully():
@@ -260,10 +277,12 @@ def test_store_candidate_interview_analysis_scores():
     )
     scores = store.create_scores(
         analysis_id=analysis["id"], interview_id=interview["id"], candidate_id=cand["id"],
-        communication_score=8, professional_score=7, motivation_score=9, overall_score=8,
+        knowledge_score=7, skills_score=6, responsibility_score=8, resilience_score=9,
+        communication_score=8, overall_score=8,
     )
     assert analysis["recommendation"] == "hire"
     assert scores["overall_score"] == 8
+    assert scores["knowledge_score"] == 7
     # Candidate dedup: same track+name returns the same row.
     again = store.upsert_candidate(SheetCandidate(full_name="Иван", track="buh"))
     assert again["id"] == cand["id"]

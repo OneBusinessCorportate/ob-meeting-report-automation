@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS public.intv_analyses (
     candidate_weaknesses jsonb,                                -- [string]
     red_flags           jsonb,                                 -- [string]
     next_steps          jsonb,                                 -- [string]
+    theses              jsonb,                                 -- [{id,title,score,comment}] x5
     recommendation      text,                                  -- hire | maybe | reject | training
     reasoning           text,
     ai_metadata         jsonb,                                 -- {usage, raw_text, …}
@@ -222,27 +223,47 @@ CREATE TRIGGER trg_intv_supersede_old_analyses
 
 -- -----------------------------------------------------------------------------
 -- 6. Interview scores  (numeric scores, kept separate; 1:1 with an analysis row)
+--    Scored on the 5 EVALUATION THESES (тезисы) of the accountant interview:
+--      knowledge_score      → Тезис 1: профессиональные знания
+--      skills_score         → Тезис 2: практический опыт и инструменты (ArmSoft)
+--      responsibility_score → Тезис 3: ответственность и внимательность
+--      resilience_score     → Тезис 4: стрессоустойчивость, честность, последоват.
+--      communication_score  → Тезис 5: коммуникация и готовность учиться
+--    overall_score is the headline score.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.intv_scores (
-    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    analysis_id         uuid NOT NULL REFERENCES public.intv_analyses(id) ON DELETE CASCADE,
-    interview_id        uuid NOT NULL REFERENCES public.intv_interviews(id) ON DELETE CASCADE,
-    candidate_id        uuid REFERENCES public.intv_candidates(id) ON DELETE CASCADE,
-    score_scale         text NOT NULL DEFAULT '0-10',
-    communication_score smallint,
-    professional_score  smallint,
-    motivation_score    smallint,
-    overall_score       smallint,
-    created_at          timestamptz NOT NULL DEFAULT now(),
+    id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    analysis_id          uuid NOT NULL REFERENCES public.intv_analyses(id) ON DELETE CASCADE,
+    interview_id         uuid NOT NULL REFERENCES public.intv_interviews(id) ON DELETE CASCADE,
+    candidate_id         uuid REFERENCES public.intv_candidates(id) ON DELETE CASCADE,
+    score_scale          text NOT NULL DEFAULT '0-10',
+    knowledge_score      smallint,   -- Тезис 1
+    skills_score         smallint,   -- Тезис 2
+    responsibility_score smallint,   -- Тезис 3
+    resilience_score     smallint,   -- Тезис 4
+    communication_score  smallint,   -- Тезис 5
+    overall_score        smallint,
+    created_at           timestamptz NOT NULL DEFAULT now(),
     UNIQUE (analysis_id),
     CONSTRAINT chk_intv_scores_range CHECK (
-        (communication_score IS NULL OR communication_score BETWEEN 0 AND 10) AND
-        (professional_score  IS NULL OR professional_score  BETWEEN 0 AND 10) AND
-        (motivation_score    IS NULL OR motivation_score    BETWEEN 0 AND 10) AND
-        (overall_score       IS NULL OR overall_score       BETWEEN 0 AND 10)
+        (knowledge_score      IS NULL OR knowledge_score      BETWEEN 0 AND 10) AND
+        (skills_score         IS NULL OR skills_score         BETWEEN 0 AND 10) AND
+        (responsibility_score IS NULL OR responsibility_score BETWEEN 0 AND 10) AND
+        (resilience_score     IS NULL OR resilience_score     BETWEEN 0 AND 10) AND
+        (communication_score  IS NULL OR communication_score  BETWEEN 0 AND 10) AND
+        (overall_score        IS NULL OR overall_score        BETWEEN 0 AND 10)
     )
 );
 CREATE INDEX IF NOT EXISTS idx_intv_scores_interview ON public.intv_scores (interview_id);
+
+-- Idempotent migration for databases created before the 5-thesis model
+-- (legacy columns professional_score / motivation_score are left in place but
+-- unused; the new analysis writes the five thesis scores below).
+ALTER TABLE public.intv_analyses ADD COLUMN IF NOT EXISTS theses jsonb;
+ALTER TABLE public.intv_scores ADD COLUMN IF NOT EXISTS knowledge_score      smallint;
+ALTER TABLE public.intv_scores ADD COLUMN IF NOT EXISTS skills_score         smallint;
+ALTER TABLE public.intv_scores ADD COLUMN IF NOT EXISTS responsibility_score smallint;
+ALTER TABLE public.intv_scores ADD COLUMN IF NOT EXISTS resilience_score     smallint;
 
 -- -----------------------------------------------------------------------------
 -- 7. Sync / processing logs  (one row per stage event; groups runs by run_id)

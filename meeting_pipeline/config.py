@@ -213,7 +213,7 @@ class Config:
     )
     interview_analysis_prompt_version: str = field(
         default_factory=lambda: _get(
-            "INTERVIEW_ANALYSIS_PROMPT_VERSION", "interview_analysis_v1"
+            "INTERVIEW_ANALYSIS_PROMPT_VERSION", "interview_analysis_v2_5theses"
         )
     )
 

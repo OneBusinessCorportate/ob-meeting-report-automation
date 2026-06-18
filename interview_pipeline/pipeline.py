@@ -225,6 +225,7 @@ def process_candidate(
             candidate_weaknesses=analysis.candidate_weaknesses,
             red_flags=analysis.red_flags,
             next_steps=analysis.next_steps,
+            theses=analysis.theses,
             recommendation=analysis.recommendation,
             reasoning=analysis.reasoning,
             ai_metadata=analysis.ai_metadata,
@@ -234,9 +235,11 @@ def process_candidate(
             analysis_id=analysis_row["id"],
             interview_id=interview_id,
             candidate_id=candidate_id,
+            knowledge_score=analysis.knowledge_score,
+            skills_score=analysis.skills_score,
+            responsibility_score=analysis.responsibility_score,
+            resilience_score=analysis.resilience_score,
             communication_score=analysis.communication_score,
-            professional_score=analysis.professional_score,
-            motivation_score=analysis.motivation_score,
             overall_score=analysis.overall_score,
         )
         store.set_interview_status(interview_id, STATUS_ANALYSIS_DONE)

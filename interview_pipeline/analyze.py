@@ -16,6 +16,7 @@ from meeting_pipeline.ai_client import build_provider_client
 from meeting_pipeline.config import Config
 from meeting_pipeline.utils import extract_json, get_logger
 from .prompts import interview_analysis_v1 as prompt_v1
+from .prompts import interview_questions as questions
 
 log = get_logger("interview_pipeline.analyze")
 
@@ -42,9 +43,14 @@ class InterviewAnalysisResult:
     candidate_weaknesses: List[str] = field(default_factory=list)
     red_flags: List[str] = field(default_factory=list)
     next_steps: List[str] = field(default_factory=list)
+    # Per-thesis evaluation: list of {id, title, score, comment} (5 entries).
+    theses: List[Dict[str, Any]] = field(default_factory=list)
+    # The 5 thesis scores, also exposed as flat fields (see interview_questions).
+    knowledge_score: Optional[int] = None
+    skills_score: Optional[int] = None
+    responsibility_score: Optional[int] = None
+    resilience_score: Optional[int] = None
     communication_score: Optional[int] = None
-    professional_score: Optional[int] = None
-    motivation_score: Optional[int] = None
     overall_score: Optional[int] = None
     recommendation: Optional[str] = None
     reasoning: Optional[str] = None
@@ -82,6 +88,47 @@ def _clamp_score(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return max(0, min(10, int(num)))
+
+
+def _parse_theses(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Normalise the model's `theses` array to 5 ordered {id,title,score,comment}.
+
+    Scores come from the thesis entry, falling back to the flat per-thesis field
+    (e.g. `knowledge_score`). Always returns the 5 canonical theses in order, so
+    a missing/garbled entry degrades to a None score instead of dropping a thesis.
+    """
+    raw = parsed.get("theses")
+    by_id: Dict[int, Dict[str, Any]] = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                tid = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            by_id[tid] = item
+
+    out: List[Dict[str, Any]] = []
+    for t in questions.THESES:
+        entry = by_id.get(t["id"], {})
+        score = _clamp_score(entry.get("score"))
+        if score is None:  # fall back to the flat field, e.g. "knowledge_score"
+            score = _clamp_score(parsed.get(t["score_field"]))
+        comment = ""
+        if isinstance(entry.get("comment"), str):
+            comment = entry["comment"].strip()
+        out.append(
+            {
+                "id": t["id"],
+                "key": t["key"],
+                "score_field": t["score_field"],
+                "title": t["title"],
+                "score": score,
+                "comment": comment,
+            }
+        )
+    return out
 
 
 def _normalize_recommendation(value: Any) -> Optional[str]:
@@ -175,6 +222,8 @@ class InterviewAnalyzer:
             )
 
         recommendation = _normalize_recommendation(parsed.get("recommendation"))
+        theses = _parse_theses(parsed)
+        thesis_score = {t["score_field"]: t["score"] for t in theses}
         return InterviewAnalysisResult(
             ok=True,
             transcript_language=parsed.get("transcript_language") or language,
@@ -184,9 +233,12 @@ class InterviewAnalyzer:
             candidate_weaknesses=_as_str_list(parsed.get("candidate_weaknesses")),
             red_flags=_as_str_list(parsed.get("red_flags")),
             next_steps=_as_str_list(parsed.get("next_steps")),
-            communication_score=_clamp_score(parsed.get("communication_score")),
-            professional_score=_clamp_score(parsed.get("professional_score")),
-            motivation_score=_clamp_score(parsed.get("motivation_score")),
+            theses=theses,
+            knowledge_score=thesis_score.get("knowledge_score"),
+            skills_score=thesis_score.get("skills_score"),
+            responsibility_score=thesis_score.get("responsibility_score"),
+            resilience_score=thesis_score.get("resilience_score"),
+            communication_score=thesis_score.get("communication_score"),
             overall_score=_clamp_score(parsed.get("overall_score")),
             recommendation=recommendation,
             reasoning=(parsed.get("reasoning") or "").strip() or None,

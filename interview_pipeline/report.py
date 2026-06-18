@@ -25,16 +25,22 @@ def _bullets(items: List[str], empty: str = "—") -> str:
     return "\n".join(f"- {i}" for i in items)
 
 
-def _score_line(a: InterviewAnalysisResult) -> str:
-    def s(v: Optional[int]) -> str:
-        return f"{v}/10" if v is not None else "—"
+def _s(v: Optional[int]) -> str:
+    return f"{v}/10" if v is not None else "—"
 
-    return (
-        f"Коммуникация {s(a.communication_score)} · "
-        f"Профессионализм {s(a.professional_score)} · "
-        f"Мотивация {s(a.motivation_score)} · "
-        f"Итог {s(a.overall_score)}"
-    )
+
+def _theses_block(a: InterviewAnalysisResult) -> List[str]:
+    """One line per thesis: «N. Title — score/10», with the comment if present."""
+    if not a.theses:
+        return []
+    out = ["**Оценка по 5 тезисам**"]
+    for t in a.theses:
+        line = f"{t.get('id')}. {t.get('title')} — {_s(t.get('score'))}"
+        comment = (t.get("comment") or "").strip()
+        if comment:
+            line += f": {comment}"
+        out.append(line)
+    return out
 
 
 def build_interview_report_md(
@@ -47,11 +53,14 @@ def build_interview_report_md(
         f"🧑‍💼 **Собеседование: {name}**",
         f"👔 Роль: {role}",
         f"📌 **Рекомендация:** {rec}",
-        f"📊 {_score_line(analysis)}",
+        f"📊 Итоговая оценка: {_s(analysis.overall_score)}",
         "",
         "**Кратко**",
         analysis.summary or "—",
     ]
+    theses = _theses_block(analysis)
+    if theses:
+        parts += [""] + theses
     if analysis.candidate_strengths:
         parts += ["", "**Сильные стороны**", _bullets(analysis.candidate_strengths)]
     if analysis.candidate_weaknesses:

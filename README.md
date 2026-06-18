@@ -621,8 +621,8 @@ beside the existing `kb_`/`mtg_`/`rag_` tables):
 | `intv_interviews` | one interview/onboarding call | `candidate_id`→candidates, `source_id`→`mtg_sources`, `call_url`, `transcript_source`, `source_call_id`, `status`; **UNIQUE(source_id, source_call_id)** |
 | `intv_transcripts` | raw kept SEPARATE from cleaned | `interview_id`, `raw_text`, `cleaned_text`, `raw_payload`, counts; **UNIQUE(interview_id)** |
 | `intv_transcript_segments` | diarized lines | `transcript_id`, `interview_id`, `idx`, `speaker`, `start_ms`, `end_ms`, `text` |
-| `intv_analyses` | AI assessment, versioned | `interview_id`, `candidate_id`, `version`, `is_current`, `summary`, `candidate_strengths/weaknesses`, `red_flags`, `next_steps`, `recommendation`, `reasoning` |
-| `intv_scores` | numeric scores (0–10), 1:1 with an analysis | `analysis_id`, `communication/professional/motivation/overall_score`; CHECK 0–10 |
+| `intv_analyses` | AI assessment, versioned | `interview_id`, `candidate_id`, `version`, `is_current`, `summary`, `candidate_strengths/weaknesses`, `red_flags`, `next_steps`, `theses` (5×{id,title,score,comment}), `recommendation`, `reasoning` |
+| `intv_scores` | 5-thesis scores (0–10), 1:1 with an analysis | `analysis_id`, `knowledge/skills/responsibility/resilience/communication_score` (Тезисы 1–5), `overall_score`; CHECK 0–10 |
 | `intv_sync_logs` | per-stage run log | `run_id`, `stage`, `level`, `status`, `interview_id`, `message`, `detail` |
 
 `intv_analyses` is versioned: inserting a new `is_current` row demotes the
@@ -653,26 +653,45 @@ Per the requirement *"try Timeless, if nothing use Docs"*:
    today are Google Docs) — via the Google API, or a public export URL;
 4. otherwise `error` with a clear message. We never substitute a summary.
 
-### 14.5 The AI analysis prompt
+### 14.5 The AI analysis prompt — 5 evaluation theses
 
-`interview_pipeline/prompts/interview_analysis_v1.py`. Grounded, Armenian-aware,
-**always answers in Russian**, returns STRICTLY this JSON (scores 0–10):
+The candidate is scored on **5 evaluation theses (тезисы)** derived from what
+OneBusiness expects from an accountant (Evelina's answer — proff. competencies +
+personal qualities). The theses, the criteria each one covers, and the interview
+questions HR asks for each are the single source of truth in
+`interview_pipeline/prompts/interview_questions.py`:
+
+| # | Тезис | Score field | Covers |
+|---|-------|-------------|--------|
+| 1 | Профессиональные знания | `knowledge_score` | законодательство РА, микро/УСН/НДС, ՀՀՄՍ/ՖՀՄՍ, налоговое планирование, основы фин. анализа |
+| 2 | Практический опыт и инструменты (ArmSoft) | `skills_score` | учёт и отчётность, первичка, ArmSoft, сроки, большие объёмы, архив |
+| 3 | Ответственность и внимательность | `responsibility_score` | ответственность, внимание к мелочам, дисциплина, конфиденциальность |
+| 4 | Стрессоустойчивость, честность, последовательность | `resilience_score` | честность, стрессоустойчивость, терпеливость/последовательность |
+| 5 | Коммуникация и готовность учиться | `communication_score` | коммуникативные навыки, готовность учиться и развиваться |
+
+`interview_pipeline/prompts/interview_analysis_v1.py` builds the prompt from
+those theses. It is grounded, Armenian-aware, **always answers in Russian**, and
+returns STRICTLY this JSON (scores 0–10):
 
 ```json
 {
   "transcript_language": "hy",
   "summary": "...", "summary_original": "...",
   "candidate_strengths": [], "candidate_weaknesses": [],
-  "communication_score": 0, "professional_score": 0,
-  "motivation_score": 0, "overall_score": 0,
+  "theses": [{"id": 1, "title": "...", "score": 0, "comment": "..."}, "... x5"],
+  "knowledge_score": 0, "skills_score": 0, "responsibility_score": 0,
+  "resilience_score": 0, "communication_score": 0, "overall_score": 0,
   "recommendation": "hire|maybe|reject|training",
   "reasoning": "...", "red_flags": [], "next_steps": []
 }
 ```
 
-The code normalises the result (scores clamped to 0–10; `recommendation` mapped
-to the four canonical values, incl. Russian synonyms) so a slightly-off model
-response still stores cleanly instead of crashing.
+The code normalises the result (always 5 ordered theses; scores clamped to 0–10;
+`recommendation` mapped to the four canonical values, incl. Russian synonyms) so
+a slightly-off model response still stores cleanly instead of crashing. The five
+thesis scores + `overall_score` land in `intv_scores`; the per-thesis comments in
+`intv_analyses.theses`. To print the full question bank:
+`python -c "from interview_pipeline.prompts import interview_questions as q; print(q.format_questionnaire())"`.
 
 ### 14.6 Setup
 
