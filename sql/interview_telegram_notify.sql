@@ -112,6 +112,13 @@ begin
 
   v_msg := '📋 Обучающий центр — обработанные собеседования (' || coalesce(v_count,0) || ')' || E'\n\n' || coalesce(v_body,'—');
 
+  -- Telegram rejects messages over 4096 chars. The digest (several candidates,
+  -- each with a full block + 5-thesis breakdown) can exceed that, so clamp with
+  -- a clear marker rather than letting the whole send fail with HTTP 400.
+  if char_length(v_msg) > 4096 then
+    v_msg := left(v_msg, 3950) || E'\n\n…✂️ список обрезан (Telegram limit). Полные данные — в Supabase.';
+  end if;
+
   select net.http_post(
     url := 'https://api.telegram.org/bot' || v_tok || '/sendMessage',
     headers := jsonb_build_object('Content-Type','application/json'),
