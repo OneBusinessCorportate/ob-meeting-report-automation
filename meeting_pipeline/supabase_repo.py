@@ -621,6 +621,16 @@ class SupabaseRepo:
                     p for p in extras.get("participant_breakdown") or []
                     if isinstance(p, dict) and (p.get("name") or "").strip()
                 ]
+                # Per-person client load (number of cases voiced) for people who
+                # actually took part — powers the workload trend per accountant.
+                workload: Dict[str, int] = {}
+                for participant in breakdown:
+                    if not participant.get("participated"):
+                        continue
+                    cases = participant.get("cases")
+                    workload[participant["name"].strip()] = (
+                        len(cases) if isinstance(cases, list) else 0
+                    )
                 stats.append(
                     {
                         "date": (meeting.get("actual_start") or "")[:10],
@@ -634,6 +644,7 @@ class SupabaseRepo:
                         "absent": [
                             p["name"] for p in breakdown if not p.get("participated")
                         ],
+                        "workload": workload,
                         "manager_pct": (extras.get("talk_share") or {}).get("manager_pct"),
                     }
                 )

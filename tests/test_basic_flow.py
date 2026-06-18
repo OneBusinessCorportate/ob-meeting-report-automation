@@ -793,8 +793,13 @@ def test_deliver_rerenders_stored_report_with_current_template():
     assert "🔴 1. Долг клиента." in text
     assert "Что решили: ❌" in text  # legacy analysis has no decision field
     assert "👤 Стелла" in text and "План на сегодня: ❌" in text and "Блокеры: –" in text
-    # No previous-task dynamics here -> no separate analytics message.
-    assert len(session.calls) == 1
+    # Even without previous-task dynamics, the workload & engagement analytics
+    # now goes out as its own follow-up message.
+    assert len(session.calls) == 2
+    analytics = session.calls[1]["text"]
+    assert analytics.startswith("📊 Аналитика планёрки")
+    assert "👥 ЗАГРУЗКА И ВОВЛЕЧЁННОСТЬ" in analytics
+    assert "👤 Стелла — 0 клиентов, 0 задач на сегодня" in analytics
 
 
 def test_deliver_sends_analytics_as_separate_message():
