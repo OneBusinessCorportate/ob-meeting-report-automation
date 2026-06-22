@@ -28,6 +28,10 @@ log = get_logger("meeting_pipeline.deliver")
 
 MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не найден."
 
+# A short follow-up line asking the tagged people to check/upload the recording
+# so the report can be generated.
+MISSING_REPORT_PROMPT = "Пожалуйста, проверьте, загружена ли запись встречи."
+
 # People to @-tag when no recording/report is found, so they notice and can act
 # (Lilit and Emiliya). Telegram detects @mentions in plain text regardless of
 # parse mode, so the notice is sent as plain text to avoid the "_" in a username
@@ -139,6 +143,7 @@ def deliver_today(
         notice = (
             f"{MISSING_REPORT_MESSAGE}\n\n"
             f"Дата: {on_date.isoformat()}\n\n"
+            f"{MISSING_REPORT_PROMPT}\n\n"
             f"{MISSING_REPORT_MENTIONS}"
         )
         # Plain text (no Markdown) so the "_" in @saakyans_21 isn't treated as

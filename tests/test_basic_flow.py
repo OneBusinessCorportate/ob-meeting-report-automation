@@ -25,6 +25,7 @@ from meeting_pipeline.config import Config
 from meeting_pipeline.deliver import (
     MISSING_REPORT_MENTIONS,
     MISSING_REPORT_MESSAGE,
+    MISSING_REPORT_PROMPT,
     deliver_today,
 )
 from meeting_pipeline.ingest import (
@@ -1057,6 +1058,8 @@ def test_deliver_today_missing_report_notifies():
     assert len(session.calls) == 1
     text = session.calls[0]["text"]
     assert MISSING_REPORT_MESSAGE in text
+    # A short prompt nudges them to check whether the recording was uploaded.
+    assert MISSING_REPORT_PROMPT in text
     # Lilit and Emiliya are @-tagged so they're alerted on a no-report day.
     assert MISSING_REPORT_MENTIONS in text
     assert "@saakyans_21" in text and "@emilyaavanesyan" in text
