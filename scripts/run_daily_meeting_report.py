@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI: combined daily run — ingest -> analyze -> deliver.
 
-This is the script the Render cron job runs at 11:00 Armenia time.
+This is the script the Render cron job runs at 11:30 Armenia time.
 
 Examples:
     # Production (Timeless API), full pipeline:

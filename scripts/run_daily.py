@@ -7,7 +7,7 @@
 
 The two steps are isolated: the interview step never affects the meeting
 report's exit status, and vice versa. The overall exit code reflects the
-meeting report (the time-critical 11:00 deliverable).
+meeting report (the time-critical 11:30 deliverable).
 """
 from __future__ import annotations
 

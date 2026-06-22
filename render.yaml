@@ -1,8 +1,8 @@
 # Render Cron configuration for the OneBusiness daily meeting report.
 #
 # Schedule note: Render cron runs in UTC. Armenia is UTC+4 (no DST), so the
-# desired 11:00 Armenia delivery time == 07:00 UTC.
-#   "0 7 * * 1-5"  ->  07:00 UTC == 11:00 Armenia, Mon–Fri.
+# desired 11:30 Armenia delivery time == 07:30 UTC.
+#   "30 7 * * 1-5"  ->  07:30 UTC == 11:30 Armenia, Mon–Fri.
 #
 # Set the environment variables from .env.example in the Render dashboard
 # (Environment tab) or via a synced env group. Never commit real secrets.
@@ -11,7 +11,7 @@ services:
   - type: cron
     name: ob-meeting-daily-report
     runtime: python
-    schedule: "0 7 * * 1-5"
+    schedule: "30 7 * * 1-5"
     buildCommand: "pip install -r requirements.txt"
     # One service does both jobs (no extra Render service needed):
     #  1) the daily morning meeting report, and
@@ -49,7 +49,7 @@ services:
       - key: MEETING_DEFAULT_LANGUAGE
         value: hy
       - key: MEETING_DELIVERY_TIME
-        value: "11:00"
+        value: "11:30"
       # --- Interview sync (same service; see scripts/run_daily.py) ---
       # Cadence overrides (days). full=1 means the candidate sheet is checked
       # every weekday: any NEW interview is analyzed and its Telegram report is
@@ -87,6 +87,6 @@ services:
 #   - type: cron
 #     name: ob-meeting-deliver
 #     runtime: python
-#     schedule: "0 7 * * 1-5"    # 11:00 Armenia
+#     schedule: "30 7 * * 1-5"   # 11:30 Armenia
 #     buildCommand: "pip install -r requirements.txt"
 #     startCommand: "python scripts/deliver_report.py"

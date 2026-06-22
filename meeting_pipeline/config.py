@@ -134,7 +134,7 @@ class Config:
         default_factory=lambda: _get("MEETING_DEFAULT_LANGUAGE", "hy")
     )
     delivery_time: str = field(
-        default_factory=lambda: _get("MEETING_DELIVERY_TIME", "11:00")
+        default_factory=lambda: _get("MEETING_DELIVERY_TIME", "11:30")
     )
     # How many days back the daily run also re-checks for pending/failed meetings,
     # so transient failures (e.g. AI quota) auto-recover on the next scheduled run

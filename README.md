@@ -5,9 +5,9 @@ pipelines** that share the same Timeless + Supabase + config infrastructure:
 
 - **Task I — Morning meeting report** (`meeting_pipeline/`): daily morning
   accounting stand-up → full transcript → Supabase L1 → AI report → Supabase L2
-  → Russian **Telegram report at 11:00 (Armenia time)**.
+  → Russian **Telegram report at 11:30 (Armenia time)**.
   Task: `[Расшифровка утренних встреч] V. Настроить ежедневную обработку встречи,
-  Отправлять отчет в Telegram в 11:00`.
+  Отправлять отчет в Telegram в 11:30`.
 - **Task II — Interview/onboarding transcription** (`interview_pipeline/`):
   interview & onboarding call **links** (from the «Обучающий центр ОВ» table) →
   fetch **full transcript** via Timeless (link → transcript) → save it correctly
@@ -50,7 +50,7 @@ Supabase L1  →  mtg_meetings.raw_transcript   (raw layer)
 Supabase L2  →  mtg_analyses                   (AI report layer)
         │  (Step 3 — Deliver)
         ▼
-Telegram (markdown report, 11:00 Armenia time)
+Telegram (markdown report, 11:30 Armenia time)
 ```
 
 The existing `mtg_*` tables are reused (no parallel system is created):
@@ -204,7 +204,7 @@ Copy `.env.example` to `.env` and fill in:
 | `TELEGRAM_MANAGEMENT_CHAT_ID`  | yes      | Target chat id for the report.                           |
 | `MEETING_DEFAULT_SOURCE`       | no       | Defaults to `timeless`.                                  |
 | `MEETING_DEFAULT_LANGUAGE`     | no       | Defaults to `hy` (Armenian).                             |
-| `MEETING_DELIVERY_TIME`        | no       | Informational; defaults to `11:00`.                      |
+| `MEETING_DELIVERY_TIME`        | no       | Informational; defaults to `11:30`.                      |
 
 \* Either a working Timeless API token **or** a local `--file` is required to
 get a transcript into the pipeline.
@@ -310,8 +310,8 @@ python scripts/run_daily_meeting_report.py \
 `render.yaml` defines one cron service that runs the combined pipeline.
 
 > **Timezone:** Render cron runs in **UTC**. Armenia is **UTC+4** (no DST), so
-> **11:00 Armenia = 07:00 UTC**. The schedule `0 7 * * 1-5` therefore fires at
-> 11:00 Armenia time, Monday–Friday.
+> **11:30 Armenia = 07:30 UTC**. The schedule `30 7 * * 1-5` therefore fires at
+> 11:30 Armenia time, Monday–Friday.
 
 Steps:
 
@@ -321,10 +321,10 @@ Steps:
 3. Start command: `python scripts/run_daily_meeting_report.py`.
 4. Add the environment variables from section 6 (mark secrets as
    not-synced / set them in the dashboard).
-5. Confirm the schedule is `0 7 * * 1-5`.
+5. Confirm the schedule is `30 7 * * 1-5`.
 
 `render.yaml` also contains a commented-out alternative with three separate
-cron jobs (ingest ~10:45, analyze ~10:50, deliver 11:00) if you prefer to split
+cron jobs (ingest ~10:45, analyze ~10:50, deliver 11:30) if you prefer to split
 the steps. One combined job is fine for the MVP.
 
 ## 10. Troubleshooting
@@ -433,7 +433,7 @@ python tests/test_interview_flow.py
 - [x] AI L2 insert works (versioned, `is_current`).
 - [x] Telegram delivery works (markdown + long-message splitting).
 - [x] Missing transcript case is handled without crashing.
-- [x] Render cron config exists (`0 7 * * 1-5` = 11:00 Armenia).
+- [x] Render cron config exists (`30 7 * * 1-5` = 11:30 Armenia).
 - [x] Logs are clear.
 - [x] No real secrets are committed (`.env` is git-ignored).
 - [x] Safe to rerun — no duplicate L2 versions (idempotent; `--force` to override).
@@ -450,7 +450,7 @@ meeting type and purpose differ:
 
 | Mode | Code | Flow | Output |
 | ---- | ---- | ---- | ------ |
-| `daily_meeting_report` | `meeting_pipeline/` | transcript → L1 → AI L2 → Telegram | Telegram report at 11:00 |
+| `daily_meeting_report` | `meeting_pipeline/` | transcript → L1 → AI L2 → Telegram | Telegram report at 11:30 |
 | `interview_transcript_processing` | `interview_pipeline/` | call link → full transcript → saved transcript + status | Saved transcript + per-link status (no Telegram) |
 
 Task II automates fetching **full transcripts** for interview & onboarding/
