@@ -1,0 +1,39 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local transcripts (keep the folder, ignore real data)
+data/transcripts/*
+!data/transcripts/.gitkeep
+!data/transcripts/sample_meeting.txt
+
+# Local interview links / transcripts (keep samples, ignore real data)
+data/interviews/*
+!data/interviews/.gitkeep
+!data/interviews/sample_links.csv
+!data/interviews/sample_buh.csv
+!data/interviews/sample_transcript_candidate1.txt
+
+# Real training-center links export (keep only the example template)
+data/training_center_links.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
