@@ -28,9 +28,9 @@ log = get_logger("meeting_pipeline.deliver")
 
 MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не найден."
 
-# A short follow-up line asking the tagged people to check/upload the recording
-# so the report can be generated.
-MISSING_REPORT_PROMPT = "Пожалуйста, проверьте, загружена ли запись встречи."
+# A short follow-up line telling the tagged people the bot will re-check the
+# database in 15 minutes and send a message then.
+MISSING_REPORT_PROMPT = "Бот проверит базу данных через 15 минут и отправит сообщение."
 
 # People to @-tag when no recording/report is found, so they notice and can act
 # (Lilit and Emiliya). Telegram detects @mentions in plain text regardless of
