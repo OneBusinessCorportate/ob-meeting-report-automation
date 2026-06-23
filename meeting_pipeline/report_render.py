@@ -56,11 +56,11 @@ NONE_DASH = "–"  # the person explicitly said there is nothing
 # Canonical checklist labels (order matters and matches the prompt schema).
 CRITERIA_LABELS = [
     "Все высказались",
-    "Руководитель задавала вопросы",
-    "Руководитель поставила задачи",
-    "Руководитель поделилась новостями",
-    "Руководитель кого-то похвалила",
-    "Руководитель спросила про прошлые задачи",
+    "Задавала вопросы",
+    "Ставила задачи",
+    "Делилась новостями",
+    "Хвалила команду",
+    "Разбирала прошлые задачи",
 ]
 
 _STATUS_ICONS = {"выполнено": "✅", "частично": "🟡", "не выполнено": "❌"}
@@ -342,8 +342,7 @@ def _score_block(data: Dict[str, Any]) -> List[str]:
     score = eff.get("score")
     if score:
         max_score = eff.get("max_score") or 10
-        # No verdict sentence: the checklist below explains the score itself.
-        out.append(f"ОЦЕНКА ВСТРЕЧИ: {int(score)} из {int(max_score)}")
+        out.append(f"Оценка: {int(score)}/{int(max_score)}")
     if criteria:
         # Older stored analyses have 5 checklist items (no followup criterion);
         # render only what was actually assessed instead of inventing a ❌.
@@ -370,7 +369,7 @@ def _attendance_block(data: Dict[str, Any]) -> List[str]:
     out: List[str] = []
     if data.get("late_start"):
         minutes = data.get("late_start_minutes") or 0
-        out.append(f"🕐 Опоздание: {int(minutes)} мин" if minutes else "🕐 Опоздание")
+        out.append(f"Опоздание: {int(minutes)} мин" if minutes else "Опоздание")
         out.append("")
     return out
 
@@ -412,18 +411,17 @@ def _accountant_blocks(
     for entry in entries:
         name = _first_name(entry.get("name"))
         if not entry.get("participated"):
-            # One line per absentee, listed together at the top of the section.
-            out.append(f"👤 {name} — не участвовал(а)")
+            out.append(f"{name} — не участвовал(а)")
             continue
         if out and not absent_done:
             out.append("")  # close the absentee group with one blank line
         absent_done = True
-        out.append(f"👤 {name}")
-        out += _field_lines("Вчера", entry.get("yesterday"))
-        out += _field_lines("Сегодня", entry.get("today_plan"))
-        out += _field_lines("Блокеры", entry.get("blockers"))
-        out += _optional_field_lines("Помощь", entry.get("needs_help"))
-        out += _optional_field_lines("Вопрос", entry.get("question_to_manager"))
+        out.append(name)
+        out += ["  " + l for l in _field_lines("Вчера", entry.get("yesterday"))]
+        out += ["  " + l for l in _field_lines("Сегодня", entry.get("today_plan"))]
+        out += ["  " + l for l in _field_lines("Блокеры", entry.get("blockers"))]
+        out += ["  " + l for l in _optional_field_lines("Помощь", entry.get("needs_help"))]
+        out += ["  " + l for l in _optional_field_lines("Вопрос", entry.get("question_to_manager"))]
         out.append("")
     if out and out[-1] != "":
         out.append("")
@@ -457,15 +455,14 @@ def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> Li
     if not grouped:
         return []
 
-    out = [f"🗣 СКАЗАЛА {manager.upper()}"]
-    # «Общее» first, then per person. Single remark → inline; multiple → numbered.
+    out = [f"{manager.upper()}"]
     for key in (["Общее"] if "Общее" in grouped else []) + [k for k in order if k != "Общее"]:
         texts = grouped[key]
         if len(texts) == 1:
-            out.append(f"{key}: {texts[0]}")
+            out.append(f"  {key}: {texts[0]}")
         else:
-            out.append(f"{key}:")
-            out.extend(f"{i}. {text}" for i, text in enumerate(texts, start=1))
+            out.append(f"  {key}:")
+            out.extend(f"  {i}. {text}" for i, text in enumerate(texts, start=1))
     out.append("")
     return out
 
@@ -477,13 +474,10 @@ def _risks_block(data: Dict[str, Any]) -> List[str]:
     # Critical situations first: high -> medium -> low (stable within a level).
     severity_rank = {"high": 0, "medium": 1, "low": 2}
     risks.sort(key=lambda r: severity_rank.get(_clean(r.get("severity")).lower(), 1))
-    out = ["⚠️ РИСКИ И СИТУАЦИИ", ""]
+    out = ["РИСКИ", ""]
     for i, risk in enumerate(risks, start=1):
-        severity = _clean(risk.get("severity")).lower()
-        icon = _SEVERITY_ICONS.get(severity, "🟡")
-        out.append(f"{icon} {i}. {_clean(risk.get('text'))}")
-        # ❌ when no decision / next step was discussed on the meeting.
-        out.append(f"Что решили: {_value_or_cross(risk.get('decision'))}")
+        out.append(f"  {i}. {_clean(risk.get('text'))}")
+        out.append(f"  Решение: {_value_or_cross(risk.get('decision'))}")
         out.append("")
     return out
 
@@ -502,13 +496,20 @@ def _tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
             order.append(assignee)
         grouped[assignee].append(item)
 
-    out = ["✅ ЗАДАЧИ НА КОНТРОЛЕ"]
+    out = ["ЗАДАЧИ"]
     for assignee in order:
-        out.append(f"👤 {assignee}:")
-        for i, task in enumerate(grouped[assignee], start=1):
-            text = _clean(task.get("text")).rstrip(".")
-            out.append(f"{i}. {text}. Срок: {_value_or_cross(task.get('deadline'))}")
-        out.append("")
+        tasks = grouped[assignee]
+        if len(tasks) == 1:
+            text = _clean(tasks[0].get("text")).rstrip(".")
+            deadline = _value_or_cross(tasks[0].get("deadline"))
+            out.append(f"  {assignee}: {text}. Срок: {deadline}")
+        else:
+            out.append(f"  {assignee}:")
+            for i, task in enumerate(tasks, start=1):
+                text = _clean(task.get("text")).rstrip(".")
+                deadline = _value_or_cross(task.get("deadline"))
+                out.append(f"    {i}. {text}. Срок: {deadline}")
+    out.append("")
     return out
 
 
@@ -594,8 +595,8 @@ def _score_line(data: Dict[str, Any], prior_stats: List[Dict[str, Any]]) -> List
     # Discipline: a late start is a meeting-effectiveness signal.
     if data.get("late_start"):
         minutes = data.get("late_start_minutes") or 0
-        out.append(f"🕐 Начали с опозданием на {int(minutes)} мин" if minutes
-                   else "🕐 Начали с опозданием")
+        out.append(f"Начали с опозданием на {int(minutes)} мин" if minutes
+                   else "Начали с опозданием")
     return out
 
 
@@ -689,7 +690,7 @@ def _manager_conduct_lines(
 
     if not body:  # nothing assessable about facilitation -> no empty header
         return []
-    return ["🧭 РУКОВОДИТЕЛЬ ВЕДЁТ ВСТРЕЧУ"] + body
+    return ["КАК ВЕЛА ВСТРЕЧУ"] + ["  " + l for l in body]
 
 
 def _accountant_tasks_lines(
@@ -708,43 +709,39 @@ def _accountant_tasks_lines(
     ]
     silent = [_person(e.get("name"), roster_firsts) for e in breakdown if not e.get("participated")]
 
-    out = ["🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ"]
-    out.append(f"План на сегодня озвучили: {len(participated) - len(no_plan)} из {len(participated)}")
+    body: List[str] = []
+    body.append(f"Озвучили план: {len(participated) - len(no_plan)} из {len(participated)}")
     if no_plan:
-        out.append(f"Не озвучили план: {', '.join(no_plan)}")
+        body.append(f"Без плана: {', '.join(no_plan)}")
 
-    # Concreteness of the tasks set today: a task without a deadline (or without
-    # an owner) is «поставлена не так» — нельзя проконтролировать.
     actions = [t for t in data.get("action_items") or [] if _clean(t.get("text"))]
     if actions:
         no_deadline = sum(1 for t in actions if not _has_text(t.get("deadline")))
         no_owner = sum(1 for t in actions if not _has_text(t.get("assignee")))
         if no_deadline:
-            out.append(f"Задачи без срока: {no_deadline} из {len(actions)} ⚠️")
+            body.append(f"Задачи без срока: {no_deadline} из {len(actions)}")
         if no_owner:
-            out.append(f"Задачи без ответственного: {no_owner} из {len(actions)} ⚠️")
+            body.append(f"Задачи без ответственного: {no_owner} из {len(actions)}")
 
-    # Questions accountants put to the manager — they need an answer ON the call.
     askers = [
         _person(e.get("name"), roster_firsts)
         for e in participated
         if _has_text(e.get("question_to_manager"))
     ]
     if askers:
-        out.append(f"Вопросы руководителю: {len(askers)} ({', '.join(askers)})")
+        body.append(f"Вопросы руководителю: {len(askers)} ({', '.join(askers)})")
 
-    # Open help requests / blockers raised — the meeting should unblock them.
     need_help = [
         _person(e.get("name"), roster_firsts)
         for e in participated
         if _has_text(e.get("needs_help")) or _real_count(e.get("blockers"))
     ]
     if need_help:
-        out.append(f"🆘 Нужна помощь / блокеры: {', '.join(need_help)}")
+        body.append(f"Помощь нужна: {', '.join(need_help)}")
 
     if silent:
-        out.append(f"Промолчали: {', '.join(silent)}")
-    return out
+        body.append(f"Промолчали: {', '.join(silent)}")
+    return ["БУХГАЛТЕРЫ"] + ["  " + l for l in body]
 
 
 def _improve_lines(
@@ -800,7 +797,7 @@ def _improve_lines(
 
     if not tips:
         return []
-    return ["💡 УЛУЧШИТЬ НА СЛЕДУЮЩЕЙ"] + [f"– {tip}" for tip in tips]
+    return ["НА СЛЕДУЮЩЕЙ"] + [f"  – {tip}" for tip in tips]
 
 
 def _analytics_block(
@@ -846,7 +843,7 @@ def _open_questions_block(data: Dict[str, Any]) -> List[str]:
     questions = [q for q in questions if q.lower() not in _MISSING_WORDS]
     if not questions:
         return []
-    return ["❓ ОТКРЫТЫЕ ВОПРОСЫ"] + [f"  – {q}" for q in questions] + [""]
+    return ["ВОПРОСЫ"] + [f"  – {q}" for q in questions] + [""]
 
 
 def _finalize(lines: List[str]) -> str:

@@ -791,9 +791,9 @@ def test_deliver_rerenders_stored_report_with_current_template():
     # Current template, not the stored legacy text.
     assert "Степень риска" not in text and "Ситуация 1" not in text
     assert "🟡 Все высказались" in text
-    assert "🔴 1. Долг клиента." in text
-    assert "Что решили: ❌" in text  # legacy analysis has no decision field
-    assert "👤 Стелла" in text and "Сегодня: ❌" in text and "Блокеры: –" in text
+    assert "1. Долг клиента." in text
+    assert "Решение: ❌" in text  # legacy analysis has no decision field
+    assert "Стелла" in text and "Сегодня: ❌" in text and "Блокеры: –" in text
     # Even without previous-task dynamics, the workload & engagement analytics
     # now goes out as its own follow-up message.
     assert len(session.calls) == 2
@@ -801,8 +801,8 @@ def test_deliver_rerenders_stored_report_with_current_template():
     assert analytics.startswith("📊 Аналитика планёрки")
     # Meeting-mechanics analytics: the score and whether accountants set tasks.
     assert "Оценка встречи: 6/10" in analytics
-    assert "🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ" in analytics
-    assert "Не озвучили план: Стелла" in analytics
+    assert "БУХГАЛТЕРЫ" in analytics
+    assert "Без плана: Стелла" in analytics
 
 
 def test_deliver_sends_analytics_as_separate_message():
@@ -847,12 +847,12 @@ def test_deliver_sends_analytics_as_separate_message():
     # Two messages: the report first, the analytics right after.
     assert len(session.calls) == 2
     report_msg, analytics_msg = session.calls[0]["text"], session.calls[1]["text"]
-    assert "👤 Оля" in report_msg
+    assert "Оля" in report_msg
     assert "📈 АНАЛИТИКА" not in report_msg  # analytics moved out of the report
     assert analytics_msg.startswith("📊 Аналитика планёрки")
     assert "Оценка встречи: 6/10" in analytics_msg
-    assert "🧑‍💼 БУХГАЛТЕРЫ СТАВЯТ ЗАДАЧИ" in analytics_msg
-    assert "Не озвучили план: Оля" in analytics_msg
+    assert "БУХГАЛТЕРЫ" in analytics_msg
+    assert "Без плана: Оля" in analytics_msg
 
 
 def test_telegram_sends_converted_bold():
