@@ -3,6 +3,10 @@
 
 This is the script the Render cron job runs at 11:30 Armenia time.
 
+If the report is not ready at 11:30, the script retries every 15 minutes
+(up to 4 times, covering until 12:30 Armenia) so a late transcript is still
+delivered automatically without manual intervention.
+
 Examples:
     # Production (Timeless API), full pipeline:
     python scripts/run_daily_meeting_report.py
@@ -20,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,30 +37,12 @@ from meeting_pipeline.utils import get_logger  # noqa: E402
 
 log = get_logger("scripts.daily")
 
+_RETRY_INTERVAL = 15 * 60   # 15 minutes between retries
+_MAX_RETRIES = 4             # covers 11:30 → 12:30 Armenia (4 × 15 min)
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Run the full daily meeting report pipeline."
-    )
-    parser.add_argument("--file", help="Local transcript file (fallback mode).")
-    parser.add_argument("--title", help="Meeting title.")
-    parser.add_argument("--date", help="Date (YYYY-MM-DD). Defaults to today.")
-    parser.add_argument("--language", help="Transcript language code.")
-    parser.add_argument("--source-meeting-id", help="Override source_meeting_id.")
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-analyze even if a current completed L2 report already exists.",
-    )
-    parser.add_argument("--skip-ingest", action="store_true")
-    parser.add_argument("--skip-analyze", action="store_true")
-    parser.add_argument("--skip-deliver", action="store_true")
-    args = parser.parse_args()
 
-    config = load_config()
-    summary = {}
-
-    # --- Step 1: Ingest -------------------------------------------------------
+def _run_pipeline(config, args: argparse.Namespace, summary: dict) -> None:
+    """Run one ingest→analyze→deliver pass, updating *summary* in-place."""
     if not args.skip_ingest:
         log.info("=== STEP 1: INGEST ===")
         try:
@@ -84,13 +71,9 @@ def main() -> int:
     else:
         log.info("Skipping ingest (--skip-ingest).")
 
-    # --- Step 2: Analyze ------------------------------------------------------
     if not args.skip_analyze:
         log.info("=== STEP 2: ANALYZE ===")
         try:
-            # Look back MEETING_ANALYZE_LOOKBACK_DAYS so pending/failed meetings
-            # (e.g. blocked earlier by AI quota) are retried automatically on the
-            # next scheduled run — no manual command needed.
             analyze_result = analyze_pending(
                 config,
                 date_str=args.date,
@@ -110,7 +93,6 @@ def main() -> int:
     else:
         log.info("Skipping analyze (--skip-analyze).")
 
-    # --- Step 3: Deliver ------------------------------------------------------
     if not args.skip_deliver:
         log.info("=== STEP 3: DELIVER ===")
         try:
@@ -124,6 +106,44 @@ def main() -> int:
             summary["deliver"] = {"status": "error", "delivered": False}
     else:
         log.info("Skipping deliver (--skip-deliver).")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the full daily meeting report pipeline."
+    )
+    parser.add_argument("--file", help="Local transcript file (fallback mode).")
+    parser.add_argument("--title", help="Meeting title.")
+    parser.add_argument("--date", help="Date (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument("--language", help="Transcript language code.")
+    parser.add_argument("--source-meeting-id", help="Override source_meeting_id.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-analyze even if a current completed L2 report already exists.",
+    )
+    parser.add_argument("--skip-ingest", action="store_true")
+    parser.add_argument("--skip-analyze", action="store_true")
+    parser.add_argument("--skip-deliver", action="store_true")
+    args = parser.parse_args()
+
+    config = load_config()
+    summary: dict = {}
+
+    _run_pipeline(config, args, summary)
+
+    # Retry every 15 minutes if the report was not ready on the first run.
+    # All pipeline steps are idempotent, so re-running is safe.
+    for retry_num in range(1, _MAX_RETRIES + 1):
+        deliver_status = summary.get("deliver", {}).get("status")
+        if deliver_status not in ("report_not_found", "notice_already_sent"):
+            break
+        log.info(
+            "Report not found — retry %d/%d in %d min.",
+            retry_num, _MAX_RETRIES, _RETRY_INTERVAL // 60,
+        )
+        time.sleep(_RETRY_INTERVAL)
+        _run_pipeline(config, args, summary)
 
     log.info("=== DAILY RUN SUMMARY ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
