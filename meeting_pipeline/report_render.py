@@ -214,32 +214,39 @@ def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
 
 
 def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
-    """Compact DB cross-check for the analytics message — no emojis, discrepancies only.
+    """DB cross-check block for the analytics message.
 
-    Format per accountant (3 lines):
-        Имя:
-        Эмилия: <manager_task>      (omitted when empty)
-        Сказал(а): <accountant_said>
-        База: <db_shows>
+    Confirmed entries shown as a compact ✅ list; discrepant entries (partial /
+    unconfirmed) shown in full 3-line detail. no_data entries are omitted.
     """
     verifications = [
         v for v in data.get("db_verifications") or []
         if isinstance(v, dict) and _clean(v.get("speaker"))
     ]
-    discrepant = [
+    checked = [
         v for v in verifications
-        if _clean(v.get("verification_status")).lower() in ("partial", "unconfirmed")
+        if _clean(v.get("verification_status")).lower() != "no_data"
     ]
-    if not discrepant:
+    if not checked:
         return []
 
     date_label = ""
-    for v in verifications:
+    for v in checked:
         if v.get("verified_date"):
             date_label = f" ({_dd_mm(v['verified_date'])})"
             break
 
+    confirmed = [v for v in checked if _clean(v.get("verification_status")).lower() == "confirmed"]
+    discrepant = [v for v in checked if _clean(v.get("verification_status")).lower() in ("partial", "unconfirmed")]
+
     lines: List[str] = [f"ПРОВЕРКА ПО БАЗЕ{date_label}", ""]
+
+    if confirmed:
+        names = ", ".join(_clean(v.get("speaker")) for v in confirmed)
+        lines.append(f"✅ {names}")
+        if discrepant:
+            lines.append("")
+
     for v in discrepant:
         name = _clean(v.get("speaker"))
         manager_task = _clean(v.get("manager_task"))

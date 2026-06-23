@@ -1651,7 +1651,7 @@ def test_db_verifications_stored_in_report_extras():
 
 
 def test_verifications_block_confirmed():
-    """Compact block skips confirmed entries — only discrepancies are shown."""
+    """Confirmed entries appear as a compact ✅ name list, no detail lines."""
     from meeting_pipeline.report_render import _verifications_compact_block
 
     data = {
@@ -1666,8 +1666,13 @@ def test_verifications_block_confirmed():
             }
         ]
     }
-    # Confirmed entries are not shown — block should be empty.
-    assert _verifications_compact_block(data) == []
+    block = _verifications_compact_block(data)
+    text = "\n".join(block)
+    assert "ПРОВЕРКА ПО БАЗЕ" in text
+    assert "✅ Стелла" in text
+    # No detail lines for confirmed entries
+    assert "Эмилия:" not in text
+    assert "Сказал(а):" not in text
 
 
 def test_verifications_block_unconfirmed():
