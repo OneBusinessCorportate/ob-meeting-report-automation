@@ -33,7 +33,7 @@ def _theses_block(a: InterviewAnalysisResult) -> List[str]:
     """One line per thesis: «N. Title — score/10», with the comment if present."""
     if not a.theses:
         return []
-    out = ["**Оценка по 5 тезисам**"]
+    out = ["Оценка по 5 тезисам"]
     for t in a.theses:
         line = f"{t.get('id')}. {t.get('title')} — {_s(t.get('score'))}"
         comment = (t.get("comment") or "").strip()
@@ -50,27 +50,27 @@ def build_interview_report_md(
     role = candidate.get("role") or "—"
     rec = _REC_LABEL.get(analysis.recommendation or "", "Не определено")
     parts: List[str] = [
-        f"🧑‍💼 **Собеседование: {name}**",
+        f"🧑‍💼 Собеседование: {name}",
         f"👔 Роль: {role}",
-        f"📌 **Рекомендация:** {rec}",
+        f"📌 Рекомендация: {rec}",
         f"📊 Итоговая оценка: {_s(analysis.overall_score)}",
         "",
-        "**Кратко**",
+        "Кратко",
         analysis.summary or "—",
     ]
     theses = _theses_block(analysis)
     if theses:
         parts += [""] + theses
     if analysis.candidate_strengths:
-        parts += ["", "**Сильные стороны**", _bullets(analysis.candidate_strengths)]
+        parts += ["", "Сильные стороны", _bullets(analysis.candidate_strengths)]
     if analysis.candidate_weaknesses:
-        parts += ["", "**Слабые стороны / риски**", _bullets(analysis.candidate_weaknesses)]
+        parts += ["", "Слабые стороны / риски", _bullets(analysis.candidate_weaknesses)]
     if analysis.red_flags:
-        parts += ["", "🚩 **Red flags**", _bullets(analysis.red_flags)]
+        parts += ["", "🚩 Red flags", _bullets(analysis.red_flags)]
     if analysis.next_steps:
-        parts += ["", "**Следующие шаги**", _bullets(analysis.next_steps)]
+        parts += ["", "Следующие шаги", _bullets(analysis.next_steps)]
     if analysis.reasoning:
-        parts += ["", "**Обоснование решения**", analysis.reasoning]
+        parts += ["", "Обоснование решения", analysis.reasoning]
     return "\n".join(parts)
 
 
