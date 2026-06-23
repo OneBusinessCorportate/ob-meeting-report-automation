@@ -91,8 +91,8 @@ class SupabaseRepo:
         The daily report covers the accounting stand-up only, so internal
         people with other roles (e.g. Гор the менеджер) are excluded — they
         otherwise show up in the "Не было" line of every report. Placeholder
-        surnames in ``full_name`` ("Стелла Бухгалтер") are stripped to the
-        first name; real surnames ("Наира Мхитарян") are kept.
+        surnames in ``full_name`` are stripped to the first name; real surnames
+        are kept as-is.
         """
         meeting_roles = {"руководитель", "бухгалтер"}
         placeholder_surnames = {"бухгалтер", "менеджер", "руководитель"}
