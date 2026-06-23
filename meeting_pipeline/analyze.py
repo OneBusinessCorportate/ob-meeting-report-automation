@@ -139,12 +139,21 @@ def _analyze_meeting_inner(
     # meetings, so the AI can flag issues that keep recurring. Best-effort.
     prior_context: List[Dict[str, Any]] = []
     previous_tasks: Optional[Dict[str, Any]] = None
+    armsoft_activity: List[Dict[str, Any]] = []
     before = meeting.get("actual_start") or meeting.get("ingested_at")
     if before:
         prior_context = repo.get_recent_meeting_context(before, limit=5)
         # Tasks of the previous stand-up: the AI grades each one against
         # today's transcript so the report can show the «динамика» block.
         previous_tasks = repo.get_previous_meeting_tasks(before)
+
+    # Armsoft DB activity: AI uses this to cross-check claims in the transcript.
+    # Best-effort — never crash analysis if the cross-check DB is unavailable.
+    try:
+        armsoft_activity = repo.get_armsoft_portfolio_activity(meeting_date) if meeting_date else []
+    except Exception as exc:
+        log.warning("Could not load Armsoft activity for AI verification: %s", exc)
+        armsoft_activity = []
 
     result = ai.analyze(
         transcript,
@@ -155,6 +164,7 @@ def _analyze_meeting_inner(
         team_roster=team_roster,
         prior_context=prior_context,
         previous_tasks=previous_tasks,
+        armsoft_activity=armsoft_activity,
     )
 
     if not result.ok:
@@ -187,6 +197,7 @@ def _analyze_meeting_inner(
             time_range=meeting_time_range(meeting, ai.config.timezone_offset_hours),
             team_roster=team_roster,
             prior_stats=repo.get_prior_meeting_stats(before) if before else [],
+            armsoft_activity=armsoft_activity,
         )
     except Exception as exc:  # rendering must never lose a completed analysis
         log.exception("Telegram report rendering failed; using model text: %s", exc)

@@ -196,14 +196,62 @@ def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
         assigned = entry.get("assigned", 0)
         active = entry.get("active", 0)
         docs = entry.get("docs", 0)
+        invoices = entry.get("invoices", 0)
+        tax_docs = entry.get("tax_docs", 0)
         if assigned == 0:
             lines.append(f"• {name} — нет назначенных клиентов")
         elif active == 0:
             lines.append(f"• {name} — {assigned} кл. | вчера: ⚠️ нет активности")
         else:
-            lines.append(
-                f"• {name} — {assigned} кл. | вчера: {active} компан., {docs} докум."
-            )
+            parts = [f"{active} компан.", f"{docs} докум."]
+            if invoices:
+                parts.append(f"{invoices} накл.")
+            if tax_docs:
+                parts.append(f"{tax_docs} нал. докум.")
+            lines.append(f"• {name} — {assigned} кл. | вчера: {', '.join(parts)}")
+    lines.append("")
+    return lines
+
+
+def _verifications_block(data: Dict[str, Any]) -> List[str]:
+    """Per-accountant DB verification results (AI cross-check of transcript claims)."""
+    verifications = [
+        v for v in data.get("db_verifications") or []
+        if isinstance(v, dict) and _clean(v.get("speaker"))
+    ]
+    # Only render if there is at least one actionable entry (skip if all no_data).
+    actionable = [
+        v for v in verifications
+        if _clean(v.get("verification_status")).lower() in ("confirmed", "partial", "unconfirmed")
+    ]
+    if not actionable:
+        return []
+
+    date_label = ""
+    for v in verifications:
+        if v.get("verified_date"):
+            date_label = f" ({_dd_mm(v['verified_date'])})"
+            break
+
+    lines: List[str] = [f"🔍 ПРОВЕРКА ПО БАЗЕ ДАННЫХ{date_label}", ""]
+    for v in actionable:
+        name = _clean(v.get("speaker"))
+        status = _clean(v.get("verification_status")).lower()
+        notes = _clean(v.get("notes"))
+        discrepancies = [_clean(d) for d in (v.get("discrepancies") or []) if _clean(d)]
+        if status == "confirmed":
+            suffix = f" {notes}" if notes else " подтверждено"
+            lines.append(f"• {name} — ✅{suffix}")
+        elif status == "partial":
+            suffix = f" {notes}" if notes else " частично"
+            lines.append(f"• {name} — 🟡{suffix}")
+            for d in discrepancies:
+                lines.append(f"  – {d}")
+        elif status == "unconfirmed":
+            suffix = f" {notes}" if notes else " расхождение с базой"
+            lines.append(f"• {name} — ⚠️{suffix}")
+            for d in discrepancies:
+                lines.append(f"  – {d}")
     lines.append("")
     return lines
 
@@ -246,6 +294,7 @@ def render_telegram_report(
     lines += _risks_block(data)
     lines += _tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
+    lines += _verifications_block(data)
     if armsoft_activity:
         lines += _armsoft_block(armsoft_activity)
     if include_analytics:

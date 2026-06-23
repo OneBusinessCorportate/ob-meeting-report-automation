@@ -54,6 +54,7 @@ _EXTRA_FIELDS = (
     "previous_tasks_status",
     "who_took_ownership",
     "talk_share",
+    "db_verifications",
 )
 
 # The report is only considered usable if at least these core fields are present.
@@ -120,6 +121,7 @@ class AIClient:
         team_roster: Optional[List[Any]] = None,
         prior_context: Optional[List[Any]] = None,
         previous_tasks: Optional[Dict[str, Any]] = None,
+        armsoft_activity: Optional[List[Any]] = None,
         max_tokens: Optional[int] = None,
     ) -> AnalysisResult:
         """Generate a structured L2 report from the FULL transcript."""
@@ -145,6 +147,7 @@ class AIClient:
             team_roster=team_roster,
             prior_context=prior_context,
             previous_tasks=previous_tasks,
+            armsoft_activity=armsoft_activity,
         )
 
         # Try once; if the model returns empty/unparseable JSON (most often a

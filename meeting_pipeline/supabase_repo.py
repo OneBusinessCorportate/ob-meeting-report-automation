@@ -180,7 +180,8 @@ class SupabaseRepo:
             if not hvhhs:
                 results.append({
                     "name": person["name"], "mqa_name": mqa_name,
-                    "assigned": 0, "active": 0, "docs": 0, "date": str(target),
+                    "assigned": 0, "active": 0, "docs": 0,
+                    "invoices": 0, "tax_docs": 0, "date": str(target),
                 })
                 continue
 
@@ -200,7 +201,8 @@ class SupabaseRepo:
             if not company_ids:
                 results.append({
                     "name": person["name"], "mqa_name": mqa_name,
-                    "assigned": assigned, "active": 0, "docs": 0, "date": str(target),
+                    "assigned": assigned, "active": 0, "docs": 0,
+                    "invoices": 0, "tax_docs": 0, "date": str(target),
                 })
                 continue
 
@@ -221,12 +223,44 @@ class SupabaseRepo:
                 active_cos = 0
                 doc_count = 0
 
+            try:
+                inv_rows = (
+                    self.armsoft_client.schema("armsoft_db")
+                    .table("parsed_issued_invoices")
+                    .select("company_id")
+                    .in_("company_id", company_ids)
+                    .gte("doc_date", day_start)
+                    .lt("doc_date", day_end)
+                    .execute()
+                ).data or []
+                invoice_count = len(inv_rows)
+            except Exception as exc:
+                log.warning("Armsoft invoice lookup failed for %s: %s", mqa_name, exc)
+                invoice_count = 0
+
+            try:
+                tax_rows = (
+                    self.armsoft_client.schema("armsoft_db")
+                    .table("tax_acc_docs_issued")
+                    .select("company_id")
+                    .in_("company_id", company_ids)
+                    .gte("issued_at", day_start)
+                    .lt("issued_at", day_end)
+                    .execute()
+                ).data or []
+                tax_doc_count = len(tax_rows)
+            except Exception as exc:
+                log.warning("Armsoft tax-doc lookup failed for %s: %s", mqa_name, exc)
+                tax_doc_count = 0
+
             results.append({
                 "name": person["name"],
                 "mqa_name": mqa_name,
                 "assigned": assigned,
                 "active": active_cos,
                 "docs": doc_count,
+                "invoices": invoice_count,
+                "tax_docs": tax_doc_count,
                 "date": str(target),
             })
 

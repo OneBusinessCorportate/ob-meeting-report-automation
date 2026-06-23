@@ -1600,6 +1600,204 @@ def test_manager_block_skips_comments_about_absent_participants():
     assert "Снова не пришла без предупреждения" not in text
 
 
+def test_build_user_prompt_embeds_armsoft_activity():
+    """build_user_prompt includes armsoft_db_context when armsoft_activity is given."""
+    from meeting_pipeline.prompts.meeting_analysis_v1 import build_user_prompt
+
+    activity = [
+        {"name": "Стелла", "assigned": 15, "active": 3, "docs": 5,
+         "invoices": 2, "tax_docs": 1, "date": "2026-06-22"},
+        {"name": "Оля", "assigned": 10, "active": 0, "docs": 0,
+         "invoices": 0, "tax_docs": 0, "date": "2026-06-22"},
+    ]
+    prompt = build_user_prompt("transcript", armsoft_activity=activity)
+    assert "armsoft_db_context" in prompt
+    assert "Стелла" in prompt
+    assert "invoices" in prompt
+    # No armsoft_activity → key must not appear in the JSON metadata object
+    prompt_no = build_user_prompt("transcript")
+    assert '"armsoft_db_context"' not in prompt_no
+
+
+def test_db_verifications_stored_in_report_extras():
+    """db_verifications from the AI output is preserved in report_extras."""
+    report_with_verifications = dict(SAMPLE_REPORT)
+    report_with_verifications["db_verifications"] = [
+        {
+            "speaker": "Лилит",
+            "verified_date": "2026-03-25",
+            "db_docs_yesterday": 3,
+            "db_invoices_yesterday": 2,
+            "db_tax_docs_yesterday": 0,
+            "verification_status": "confirmed",
+            "notes": "В базе: 2 накладных, соответствует заявленному.",
+            "discrepancies": [],
+        }
+    ]
+    repo = _repo()
+    ai = AIClient(_config(), client=FakeAnthropic(report=report_with_verifications))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "title": "Планёрка",
+        "actual_start": "2026-03-26T05:00:00+00:00",
+        "raw_transcript": {"type": "full_transcript", "text": "transcript text"},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is True
+    extras = result["analysis"]["ai_metadata"]["report_extras"]
+    assert "db_verifications" in extras
+    assert extras["db_verifications"][0]["speaker"] == "Лилит"
+    assert extras["db_verifications"][0]["verification_status"] == "confirmed"
+
+
+def test_verifications_block_confirmed():
+    """_verifications_block renders a confirmed entry."""
+    from meeting_pipeline.report_render import _verifications_block
+
+    data = {
+        "db_verifications": [
+            {
+                "speaker": "Стелла",
+                "verified_date": "2026-06-22",
+                "db_docs_yesterday": 5,
+                "db_invoices_yesterday": 2,
+                "db_tax_docs_yesterday": 1,
+                "verification_status": "confirmed",
+                "notes": "В базе: 2 накладных, 1 нал. документ за вчера.",
+                "discrepancies": [],
+            }
+        ]
+    }
+    block = _verifications_block(data)
+    text = "\n".join(block)
+    assert "🔍 ПРОВЕРКА ПО БАЗЕ ДАННЫХ" in text
+    assert "Стелла" in text
+    assert "✅" in text
+    assert "22.06" in text
+
+
+def test_verifications_block_unconfirmed():
+    """_verifications_block renders an unconfirmed entry with discrepancy details."""
+    from meeting_pipeline.report_render import _verifications_block
+
+    data = {
+        "db_verifications": [
+            {
+                "speaker": "Оля",
+                "verified_date": "2026-06-22",
+                "db_docs_yesterday": 0,
+                "db_invoices_yesterday": 0,
+                "db_tax_docs_yesterday": 0,
+                "verification_status": "unconfirmed",
+                "notes": "В базе 0 активности за вчера.",
+                "discrepancies": ["Сотрудник сказала, что работала с клиентами, в базе не зафиксировано"],
+            }
+        ]
+    }
+    block = _verifications_block(data)
+    text = "\n".join(block)
+    assert "⚠️" in text
+    assert "Оля" in text
+    assert "Сотрудник сказала" in text
+
+
+def test_verifications_block_empty_when_all_no_data():
+    """_verifications_block returns [] when all entries have no_data status."""
+    from meeting_pipeline.report_render import _verifications_block
+
+    data = {
+        "db_verifications": [
+            {"speaker": "Стелла", "verification_status": "no_data",
+             "notes": "", "discrepancies": []},
+        ]
+    }
+    assert _verifications_block(data) == []
+
+
+def test_verifications_block_absent_when_no_db_verifications():
+    """Report does not include verifications section when db_verifications is absent."""
+    from meeting_pipeline.report_render import render_telegram_report
+
+    data = {
+        "effectiveness": {"score": 7, "criteria": [
+            {"criterion": "Все сотрудники высказались", "status": "выполнено"}
+        ]},
+        "participant_breakdown": [
+            {"name": "Стелла", "participated": True,
+             "yesterday": "Сделала акты.", "today_plan": [], "blockers": ["нет"]},
+        ],
+    }
+    text = render_telegram_report(data, meeting_date="2026-06-22",
+                                  team_roster=[{"name": "Стелла", "role": "бухгалтер"}],
+                                  include_analytics=False)
+    assert "🔍 ПРОВЕРКА ПО БАЗЕ ДАННЫХ" not in text
+
+
+def test_armsoft_block_shows_invoice_and_tax_doc_counts():
+    """_armsoft_block includes invoice/tax_doc breakdown when counts > 0."""
+    from meeting_pipeline.report_render import _armsoft_block
+
+    activity = [
+        {"name": "Стелла", "assigned": 15, "active": 3, "docs": 5,
+         "invoices": 2, "tax_docs": 1, "date": "2026-06-22"},
+        {"name": "Оля", "assigned": 10, "active": 0, "docs": 0,
+         "invoices": 0, "tax_docs": 0, "date": "2026-06-22"},
+    ]
+    block = _armsoft_block(activity)
+    text = "\n".join(block)
+    assert "накл." in text           # invoice count shown
+    assert "нал. докум." in text     # tax doc count shown
+    assert "⚠️ нет активности" in text  # Оля had no activity
+
+
+def test_analyze_meeting_fetches_armsoft_for_ai_verification():
+    """analyze_meeting fetches armsoft activity and passes it to the AI."""
+    calls = []
+
+    class _CapturingAnthropic:
+        def __init__(self, report):
+            self._report = report
+            self.messages = self
+
+        def create(self, **kwargs):
+            calls.append(kwargs.get("messages", []))
+
+            class _Block:
+                text = json.dumps(self._report)
+
+            class _Usage:
+                input_tokens = 10
+                output_tokens = 5
+
+            class _Resp:
+                content = [_Block()]
+                usage = _Usage()
+
+            return _Resp()
+
+    class _MockArmsoft:
+        def get_armsoft_portfolio_activity(self, before_date):
+            return [{"name": "Стелла", "assigned": 10, "active": 2, "docs": 4,
+                     "invoices": 2, "tax_docs": 0, "date": "2026-03-25"}]
+
+    repo = _repo()
+    repo.get_armsoft_portfolio_activity = _MockArmsoft().get_armsoft_portfolio_activity
+    ai = AIClient(_config(), client=_CapturingAnthropic(SAMPLE_REPORT))
+    meeting = {
+        "id": str(uuid.uuid4()),
+        "title": "Планёрка",
+        "actual_start": "2026-03-26T05:00:00+00:00",
+        "raw_transcript": {"type": "full_transcript", "text": "Стелла: Сделала накладные."},
+    }
+    result = analyze_meeting(repo, ai, meeting)
+    assert result["ok"] is True
+    # The first AI call must have the armsoft_db_context in the user message.
+    assert calls, "AI was never called"
+    user_content = calls[0][0]["content"]
+    assert "armsoft_db_context" in user_content
+    assert "Стелла" in user_content
+
+
 def test_get_team_roster_includes_email():
     """get_team_roster() must return email when present in mtg_participants."""
     repo = _repo()
