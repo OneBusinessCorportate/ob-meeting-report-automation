@@ -213,18 +213,17 @@ def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
     return lines
 
 
-def _verifications_block(data: Dict[str, Any]) -> List[str]:
-    """Per-accountant DB verification results (AI cross-check of transcript claims)."""
+def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
+    """Compact DB cross-check for the analytics message — no emojis, discrepancies only."""
     verifications = [
         v for v in data.get("db_verifications") or []
         if isinstance(v, dict) and _clean(v.get("speaker"))
     ]
-    # Only render if there is at least one actionable entry (skip if all no_data).
-    actionable = [
+    discrepant = [
         v for v in verifications
-        if _clean(v.get("verification_status")).lower() in ("confirmed", "partial", "unconfirmed")
+        if _clean(v.get("verification_status")).lower() in ("partial", "unconfirmed")
     ]
-    if not actionable:
+    if not discrepant:
         return []
 
     date_label = ""
@@ -233,25 +232,13 @@ def _verifications_block(data: Dict[str, Any]) -> List[str]:
             date_label = f" ({_dd_mm(v['verified_date'])})"
             break
 
-    lines: List[str] = [f"🔍 ПРОВЕРКА ПО БАЗЕ ДАННЫХ{date_label}", ""]
-    for v in actionable:
+    lines: List[str] = [f"ПРОВЕРКА ПО БАЗЕ{date_label}"]
+    for v in discrepant:
         name = _clean(v.get("speaker"))
-        status = _clean(v.get("verification_status")).lower()
         notes = _clean(v.get("notes"))
         discrepancies = [_clean(d) for d in (v.get("discrepancies") or []) if _clean(d)]
-        if status == "confirmed":
-            suffix = f" {notes}" if notes else " подтверждено"
-            lines.append(f"• {name} — ✅{suffix}")
-        elif status == "partial":
-            suffix = f" {notes}" if notes else " частично"
-            lines.append(f"• {name} — 🟡{suffix}")
-            for d in discrepancies:
-                lines.append(f"  – {d}")
-        elif status == "unconfirmed":
-            suffix = f" {notes}" if notes else " расхождение с базой"
-            lines.append(f"• {name} — ⚠️{suffix}")
-            for d in discrepancies:
-                lines.append(f"  – {d}")
+        text = notes or (discrepancies[0] if discrepancies else "расхождение с базой")
+        lines.append(f"{name}: {text}")
     lines.append("")
     return lines
 
@@ -294,7 +281,6 @@ def render_telegram_report(
     lines += _risks_block(data)
     lines += _tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
-    lines += _verifications_block(data)
     if armsoft_activity:
         lines += _armsoft_block(armsoft_activity)
     if include_analytics:
@@ -321,12 +307,18 @@ def render_analytics_message(
     roster_firsts = _roster_firsts(team_roster)
     manager = _find_manager(team_roster)
     block = _analytics_block(data, prior_stats, roster_firsts, manager)
-    if not block:
+    verif = _verifications_compact_block(data)
+    if not block and not verif:
         return ""
     title = "📊 Аналитика планёрки"
     if meeting_date:
         title += f" · {_dd_mm(meeting_date)}"
-    return _finalize([title, ""] + block)
+    content = [title, ""] + block
+    if verif:
+        if block:
+            content.append("")
+        content += verif
+    return _finalize(content)
 
 
 # --- sections -----------------------------------------------------------------

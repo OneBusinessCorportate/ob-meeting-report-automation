@@ -1651,59 +1651,52 @@ def test_db_verifications_stored_in_report_extras():
 
 
 def test_verifications_block_confirmed():
-    """_verifications_block renders a confirmed entry."""
-    from meeting_pipeline.report_render import _verifications_block
+    """Compact block skips confirmed entries — only discrepancies are shown."""
+    from meeting_pipeline.report_render import _verifications_compact_block
 
     data = {
         "db_verifications": [
             {
                 "speaker": "Стелла",
                 "verified_date": "2026-06-22",
-                "db_docs_yesterday": 5,
-                "db_invoices_yesterday": 2,
-                "db_tax_docs_yesterday": 1,
                 "verification_status": "confirmed",
                 "notes": "В базе: 2 накладных, 1 нал. документ за вчера.",
                 "discrepancies": [],
             }
         ]
     }
-    block = _verifications_block(data)
-    text = "\n".join(block)
-    assert "🔍 ПРОВЕРКА ПО БАЗЕ ДАННЫХ" in text
-    assert "Стелла" in text
-    assert "✅" in text
-    assert "22.06" in text
+    # Confirmed entries are not shown — block should be empty.
+    assert _verifications_compact_block(data) == []
 
 
 def test_verifications_block_unconfirmed():
-    """_verifications_block renders an unconfirmed entry with discrepancy details."""
-    from meeting_pipeline.report_render import _verifications_block
+    """Compact block renders unconfirmed entry: name + notes, no emojis."""
+    from meeting_pipeline.report_render import _verifications_compact_block
 
     data = {
         "db_verifications": [
             {
                 "speaker": "Оля",
                 "verified_date": "2026-06-22",
-                "db_docs_yesterday": 0,
-                "db_invoices_yesterday": 0,
-                "db_tax_docs_yesterday": 0,
                 "verification_status": "unconfirmed",
                 "notes": "В базе 0 активности за вчера.",
                 "discrepancies": ["Сотрудник сказала, что работала с клиентами, в базе не зафиксировано"],
             }
         ]
     }
-    block = _verifications_block(data)
+    block = _verifications_compact_block(data)
     text = "\n".join(block)
-    assert "⚠️" in text
+    assert "ПРОВЕРКА ПО БАЗЕ" in text
+    assert "22.06" in text
     assert "Оля" in text
-    assert "Сотрудник сказала" in text
+    assert "В базе 0 активности" in text
+    assert "⚠️" not in text  # no emojis
+    assert "✅" not in text
 
 
 def test_verifications_block_empty_when_all_no_data():
-    """_verifications_block returns [] when all entries have no_data status."""
-    from meeting_pipeline.report_render import _verifications_block
+    """Compact block returns [] when all entries have no_data status."""
+    from meeting_pipeline.report_render import _verifications_compact_block
 
     data = {
         "db_verifications": [
@@ -1711,11 +1704,11 @@ def test_verifications_block_empty_when_all_no_data():
              "notes": "", "discrepancies": []},
         ]
     }
-    assert _verifications_block(data) == []
+    assert _verifications_compact_block(data) == []
 
 
 def test_verifications_block_absent_when_no_db_verifications():
-    """Report does not include verifications section when db_verifications is absent."""
+    """Main report (message 1) no longer contains a verifications section."""
     from meeting_pipeline.report_render import render_telegram_report
 
     data = {
@@ -1730,7 +1723,7 @@ def test_verifications_block_absent_when_no_db_verifications():
     text = render_telegram_report(data, meeting_date="2026-06-22",
                                   team_roster=[{"name": "Стелла", "role": "бухгалтер"}],
                                   include_analytics=False)
-    assert "🔍 ПРОВЕРКА ПО БАЗЕ ДАННЫХ" not in text
+    assert "ПРОВЕРКА ПО БАЗЕ" not in text
 
 
 def test_armsoft_block_shows_invoice_and_tax_doc_counts():
