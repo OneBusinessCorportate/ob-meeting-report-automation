@@ -132,7 +132,8 @@ def main() -> int:
 
     _run_pipeline(config, args, summary)
 
-    # Retry every 15 minutes if the report was not ready on the first run.
+    # Retry every 30 minutes ONLY when the report was not found (negative case).
+    # When delivery succeeds, the loop breaks immediately — no pointless retries.
     # All pipeline steps are idempotent, so re-running is safe.
     for retry_num in range(1, _MAX_RETRIES + 1):
         deliver_status = summary.get("deliver", {}).get("status")

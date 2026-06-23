@@ -409,6 +409,64 @@
     font-weight: 600;
   }
 
+  /* ---- Verification block (DB fact vs accountant claim) ---- */
+  .comment-verify {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: var(--gray-50);
+    border: 1px solid var(--gray-200);
+    border-radius: 6px;
+    border-left: 3px solid var(--blue);
+    font-size: 12px;
+  }
+  .comment-verify-title {
+    font-weight: 700;
+    color: var(--blue);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    margin-bottom: 5px;
+  }
+  .comment-verify-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .verify-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    color: var(--gray-800);
+  }
+  .verify-chip .vc-num {
+    font-weight: 700;
+    color: var(--green);
+  }
+  .verify-chip .vc-num.zero {
+    color: var(--gray-400);
+  }
+  .verify-chip .vc-label {
+    color: var(--gray-600);
+  }
+  .verify-total {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--gray-600);
+  }
+  .verify-total strong {
+    color: var(--gray-800);
+  }
+  .verify-loading {
+    color: var(--gray-400);
+    font-style: italic;
+    font-size: 12px;
+  }
+
   /* ---- Missing companies section ---- */
   .missing-header {
     display: flex;
@@ -492,14 +550,24 @@
         <div class="card-sub">всего в базе Армсофт</div>
       </div>
       <div class="card green">
-        <div class="card-label">Выписано инвойсов</div>
+        <div class="card-label">Инвойсы (Армсофт)</div>
         <div class="card-value" id="cardInvoices">—</div>
-        <div class="card-sub">Армсофт</div>
+        <div class="card-sub">выписанные счета</div>
+      </div>
+      <div class="card blue">
+        <div class="card-label">Журнал документов</div>
+        <div class="card-value" id="cardDocs">—</div>
+        <div class="card-sub">Армсофт — все типы</div>
+      </div>
+      <div class="card blue">
+        <div class="card-label">Проводки</div>
+        <div class="card-value" id="cardJops">—</div>
+        <div class="card-sub">Армсофт — журнал операций</div>
       </div>
       <div class="card amber">
         <div class="card-label">Сдано отчетности</div>
         <div class="card-value" id="cardReports">—</div>
-        <div class="card-sub">ТаксСервис — сданные формы</div>
+        <div class="card-sub">ТаксСервис — формы</div>
       </div>
       <div class="card red">
         <div class="card-label">Подано заявлений</div>
@@ -510,6 +578,16 @@
         <div class="card-label">Изменений остатков</div>
         <div class="card-value" id="cardBalance">—</div>
         <div class="card-sub">единый налоговый счёт</div>
+      </div>
+      <div class="card green">
+        <div class="card-label">Э-счета выставлены</div>
+        <div class="card-value" id="cardTaxIssued">—</div>
+        <div class="card-sub">ТаксСервис — исходящие</div>
+      </div>
+      <div class="card amber">
+        <div class="card-label">Э-счета получены</div>
+        <div class="card-value" id="cardTaxReceived">—</div>
+        <div class="card-sub">ТаксСервис — входящие</div>
       </div>
     </div>
 
@@ -528,14 +606,24 @@
             <tr>
               <th onclick="sortTable('company_name')">Компания</th>
               <th onclick="sortTable('primary_accountant')">Бухгалтер</th>
-              <th class="num-cell" onclick="sortTable('invoice_count')" title="Выписано инвойсов (Армсофт)">Инвойсы</th>
-              <th class="num-cell" onclick="sortTable('report_count')" title="Сдано отчетности (ТаксСервис)">Отчеты</th>
-              <th class="num-cell" onclick="sortTable('application_count')" title="Подано заявлений (ТаксСервис)">Заявления</th>
-              <th class="num-cell" onclick="sortTable('balance_change_count')" title="Изменений остатков">Остатки</th>
+              <th class="num-cell" colspan="3" style="background:rgba(22,163,74,.06);color:var(--green);border-bottom:2px solid #86efac">Армсофт</th>
+              <th class="num-cell" colspan="5" style="background:rgba(217,119,6,.06);color:var(--amber);border-bottom:2px solid #fcd34d">ТаксСервис</th>
+            </tr>
+            <tr>
+              <th></th>
+              <th></th>
+              <th class="num-cell" onclick="sortTable('invoice_count')" title="Выписано инвойсов (Армсофт)" style="background:rgba(22,163,74,.04)">Инвойсы</th>
+              <th class="num-cell" onclick="sortTable('docs_journal_count')" title="Журнал документов (все типы)" style="background:rgba(22,163,74,.04)">Журнал</th>
+              <th class="num-cell" onclick="sortTable('journal_ops_count')" title="Журнал проводок" style="background:rgba(22,163,74,.04)">Проводки</th>
+              <th class="num-cell" onclick="sortTable('report_count')" title="Сдано отчетности (ТаксСервис)" style="background:rgba(217,119,6,.04)">Отчеты</th>
+              <th class="num-cell" onclick="sortTable('application_count')" title="Подано заявлений (ТаксСервис)" style="background:rgba(217,119,6,.04)">Заявления</th>
+              <th class="num-cell" onclick="sortTable('balance_change_count')" title="Изменений остатков" style="background:rgba(217,119,6,.04)">Остатки</th>
+              <th class="num-cell" onclick="sortTable('tax_issued_count')" title="Э-счета выставлены (ТаксСервис)" style="background:rgba(217,119,6,.04)">Э-счета↑</th>
+              <th class="num-cell" onclick="sortTable('tax_received_count')" title="Э-счета получены (ТаксСервис)" style="background:rgba(217,119,6,.04)">Э-счета↓</th>
             </tr>
           </thead>
           <tbody id="reportBody">
-            <tr><td colspan="6">
+            <tr><td colspan="10">
               <div class="loading"><div class="spinner"></div>Загрузка данных…</div>
             </td></tr>
           </tbody>
@@ -792,11 +880,15 @@ async function applyFilters() {
   });
   if (stats && stats[0]) {
     const s = stats[0];
-    document.getElementById('cardCompanies').textContent = fmt(s.total_companies);
-    document.getElementById('cardInvoices').textContent  = fmt(s.total_invoices);
-    document.getElementById('cardReports').textContent   = fmt(s.total_reports);
-    document.getElementById('cardApps').textContent      = fmt(s.total_applications);
-    document.getElementById('cardBalance').textContent   = fmt(s.total_balance_changes);
+    document.getElementById('cardCompanies').textContent  = fmt(s.total_companies);
+    document.getElementById('cardInvoices').textContent   = fmt(s.total_invoices);
+    document.getElementById('cardDocs').textContent       = fmt(s.total_docs_journal);
+    document.getElementById('cardJops').textContent       = fmt(s.total_journal_ops);
+    document.getElementById('cardReports').textContent    = fmt(s.total_reports);
+    document.getElementById('cardApps').textContent       = fmt(s.total_applications);
+    document.getElementById('cardBalance').textContent    = fmt(s.total_balance_changes);
+    document.getElementById('cardTaxIssued').textContent  = fmt(s.total_tax_issued);
+    document.getElementById('cardTaxReceived').textContent = fmt(s.total_tax_received);
   }
 
   // Per-company data
@@ -806,7 +898,7 @@ async function applyFilters() {
   });
   if (error) {
     document.getElementById('reportBody').innerHTML =
-      `<tr><td colspan="6"><div class="alert alert-error">Ошибка: ${error.message}</div></td></tr>`;
+      `<tr><td colspan="10"><div class="alert alert-error">Ошибка: ${error.message}</div></td></tr>`;
     return;
   }
 
@@ -866,7 +958,7 @@ function renderReport() {
 
   const tbody = document.getElementById('reportBody');
   if (filteredData.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6">
+    tbody.innerHTML = `<tr><td colspan="10">
       <div class="empty-state"><h3>Нет данных по выбранным фильтрам</h3></div>
     </td></tr>`;
     return;
@@ -877,13 +969,21 @@ function renderReport() {
       ? '<span class="badge badge-gray">Общий</span>'
       : `<span class="badge badge-blue" title="${r.primary_accountant}">${shortEmail(r.primary_accountant)}</span>`;
 
+    const n = (v, bg) => `<td class="num-cell ${v > 0 ? 'num-good' : 'num-zero'}" style="${bg}">${fmt(v)}</td>`;
+    const ga = 'background:rgba(22,163,74,.04)';
+    const am = 'background:rgba(217,119,6,.04)';
+
     return `<tr>
       <td><strong>${r.company_name || r.company_code}</strong></td>
       <td>${acc}</td>
-      <td class="num-cell ${r.invoice_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.invoice_count)}</td>
-      <td class="num-cell ${r.report_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.report_count)}</td>
-      <td class="num-cell ${r.application_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.application_count)}</td>
-      <td class="num-cell ${r.balance_change_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.balance_change_count)}</td>
+      ${n(r.invoice_count, ga)}
+      ${n(r.docs_journal_count, ga)}
+      ${n(r.journal_ops_count, ga)}
+      ${n(r.report_count, am)}
+      ${n(r.application_count, am)}
+      ${n(r.balance_change_count, am)}
+      ${n(r.tax_issued_count, am)}
+      ${n(r.tax_received_count, am)}
     </tr>`;
   }).join('');
 
@@ -921,10 +1021,17 @@ function setLoading(tbodyId, cols) {
 // ============================================================
 function exportCSV() {
   if (!filteredData.length) return;
-  const headers = ['Компания', 'Код', 'Бухгалтер', 'Инвойсы (Армсофт)', 'Отчеты (Такс)', 'Заявления (Такс)', 'Изменений остатков'];
+  const headers = [
+    'Компания', 'Код', 'Бухгалтер',
+    'Инвойсы (Армсофт)', 'Журнал документов (Армсофт)', 'Проводки (Армсофт)',
+    'Отчеты (ТаксСервис)', 'Заявления (ТаксСервис)', 'Изменений остатков',
+    'Э-счета выставлены', 'Э-счета получены'
+  ];
   const rows = filteredData.map(r => [
     r.company_name, r.company_code, r.primary_accountant,
-    r.invoice_count, r.report_count, r.application_count, r.balance_change_count
+    r.invoice_count, r.docs_journal_count, r.journal_ops_count,
+    r.report_count, r.application_count, r.balance_change_count,
+    r.tax_issued_count, r.tax_received_count
   ]);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -1003,7 +1110,7 @@ async function addOBCompany() {
 }
 
 // ============================================================
-// Comments tab
+// Comments tab  (with DB verification)
 // ============================================================
 async function loadComments() {
   const filterAccountant = document.getElementById('commentsFilterAccountant').value;
@@ -1026,17 +1133,85 @@ async function loadComments() {
     return;
   }
 
-  el.innerHTML = data.map(c => `
-    <div class="comment-item">
+  // Render immediately; verification loads async per comment
+  el.innerHTML = data.map((c, i) => `
+    <div class="comment-item" id="ci-${i}">
       <div class="comment-meta">
-        <span class="comment-author">${c.accountant_email}</span>
+        <span class="comment-author">${escHtml(c.accountant_email)}</span>
         <span class="comment-date">${formatDate(c.comment_date)}</span>
-        ${c.company_name ? `<span class="comment-company">${c.company_name}</span>` : ''}
+        ${c.company_name ? `<span class="comment-company">${escHtml(c.company_name)}</span>` : ''}
       </div>
       <div class="comment-text">${escHtml(c.comment)}</div>
       ${c.unaccounted_work ? `<div class="comment-unaccounted">${escHtml(c.unaccounted_work)}</div>` : ''}
+      <div class="comment-verify" id="cv-${i}">
+        <div class="verify-loading">Загрузка данных из БД…</div>
+      </div>
     </div>
   `).join('');
+
+  // Load verification data for each comment (parallel, up to 10 unique dates per batch)
+  const fetched = {}; // key: "date|accountant" → Promise<data>
+  data.forEach((c, i) => {
+    const dateStr = String(c.comment_date || '').slice(0, 10);
+    if (!dateStr) return;
+    const key = `${dateStr}|${c.accountant_email}`;
+    if (!fetched[key]) {
+      fetched[key] = db.rpc('get_daily_verification', {
+        p_date: dateStr,
+        p_accountant: c.accountant_email
+      }).then(r => r.data || []);
+    }
+    fetched[key].then(rows => {
+      const target = document.getElementById(`cv-${i}`);
+      if (!target) return;
+      // If comment has a company_id, filter to that company; else sum all
+      let matching = rows;
+      if (c.company_id) matching = rows.filter(r => r.company_id === c.company_id);
+      renderVerifyBlock(target, matching, rows);
+    });
+  });
+}
+
+function renderVerifyBlock(el, rows, allRows) {
+  if (!rows || rows.length === 0) {
+    // Show total across all companies if no specific match
+    const total = allRows.reduce((s, r) => s + Number(r.total_actions || 0), 0);
+    if (total === 0) {
+      el.innerHTML = `
+        <div class="comment-verify-title">Факт по БД за этот день</div>
+        <div class="verify-loading" style="color:var(--gray-400)">Активности в БД не найдено</div>`;
+      return;
+    }
+    rows = allRows;
+  }
+
+  const sum = (key) => rows.reduce((s, r) => s + Number(r[key] || 0), 0);
+  const inv   = sum('invoices_issued');
+  const docs  = sum('docs_journal');
+  const jops  = sum('journal_ops');
+  const reps  = sum('reports_submitted');
+  const apps  = sum('applications_saved');
+  const bals  = sum('balance_changes');
+  const tinv  = sum('tax_invoices_issued');
+  const trinv = sum('tax_invoices_received');
+  const total = inv + docs + jops + reps + apps + bals + tinv + trinv;
+
+  const chip = (label, val) =>
+    `<span class="verify-chip"><span class="vc-label">${label}:</span><span class="vc-num${val === 0 ? ' zero' : ''}">${val}</span></span>`;
+
+  el.innerHTML = `
+    <div class="comment-verify-title">Факт по БД за этот день ${rows.length > 1 ? `(${rows.length} компаний)` : ''}</div>
+    <div class="comment-verify-grid">
+      ${chip('Инвойсы', inv)}
+      ${chip('Журнал', docs)}
+      ${chip('Проводки', jops)}
+      ${chip('Отчеты', reps)}
+      ${chip('Заявления', apps)}
+      ${chip('Остатки', bals)}
+      ${chip('Э-счета↑', tinv)}
+      ${chip('Э-счета↓', trinv)}
+    </div>
+    <div class="verify-total">Итого действий: <strong>${total}</strong></div>`;
 }
 
 async function addComment() {

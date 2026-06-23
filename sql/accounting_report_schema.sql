@@ -342,4 +342,20 @@ BEGIN
 END;
 $$;
 
+-- NOTE: The functions above were superseded by expanded versions (migrations
+-- expand_accounting_report_all_tables + fix_tax_invoice_date_column).
+-- The live database has get_accounting_report returning 13 columns (4 extra),
+-- get_summary_stats returning 10 columns (4 extra), and a new
+-- get_daily_verification function. See those migrations for the current SQL.
+--
+-- Extra columns added to get_accounting_report:
+--   docs_journal_count   BIGINT  -- armsoft_db.parsed_documents_journal
+--   journal_ops_count    BIGINT  -- armsoft_db.parsed_journal_operations
+--   tax_issued_count     BIGINT  -- armsoft_db.tax_invoices_issued (issued_at)
+--   tax_received_count   BIGINT  -- armsoft_db.tax_invoices_received (issued_at)
+--
+-- get_daily_verification(p_date DATE, p_accountant TEXT) - new RPC
+--   Returns per-company activity for a single date across all 8 tables,
+--   used by the dashboard to cross-check accountant daily comments against DB.
+
 GRANT EXECUTE ON FUNCTION public.get_summary_stats TO anon, authenticated;
