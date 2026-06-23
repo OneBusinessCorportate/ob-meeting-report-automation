@@ -1327,6 +1327,233 @@ def test_analyze_meeting_success_with_gemini():
 
 
 # --------------------------------------------------------------------------- #
+# New: coverage gaps identified in test audit
+# --------------------------------------------------------------------------- #
+
+class _FailingPriorStatsRepo(SupabaseRepo):
+    """Repo whose get_prior_meeting_stats always raises to test graceful degradation."""
+    def get_prior_meeting_stats(self, actual_start=None):
+        raise RuntimeError("Simulated DB error fetching prior stats")
+
+
+def test_render_prior_stats_exception_still_delivers_with_template():
+    """If get_prior_meeting_stats raises, re-render still uses the current template.
+
+    Before the fix, the exception propagated to the outer handler, which fell
+    back to the stored legacy text. With the fix, prior_stats defaults to []
+    and the modern template is used — just without historical trend data.
+    """
+    config = _config()
+    repo = _FailingPriorStatsRepo(config, client=FakeSupabaseClient())
+    repo.client.store["mtg_participants"] = [
+        {"full_name": "Эмилия Аванесян", "is_internal": True,
+         "metadata": {"role": "руководитель"}},
+        {"full_name": "Стелла Бухгалтер", "is_internal": True,
+         "metadata": {"role": "бухгалтер"}},
+    ]
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_prior_fail",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-04-01T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="LEGACY TEXT",
+        ai_metadata={"report_extras": {
+            "effectiveness": {
+                "score": 7, "verdict": "Хорошо.",
+                "criteria": [{"criterion": "Все сотрудники высказались",
+                              "status": "выполнено"}],
+            },
+            "participant_breakdown": [
+                {"name": "Стелла", "participated": True,
+                 "yesterday": "Сделала отчёт.", "today_plan": [],
+                 "blockers": ["нет"]},
+            ],
+        }},
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = deliver_today(config, date_str="2026-04-01", repo=repo, telegram=telegram)
+    assert result["delivered"] is True
+    text = session.calls[0]["text"]
+    # Must use the current template, not fall back to the stored legacy string.
+    assert "LEGACY TEXT" not in text
+    assert "✅ Все высказались" in text
+
+
+class _FailingMarkStatusRepo(SupabaseRepo):
+    """Repo whose mark_delivery_status always raises."""
+    def mark_delivery_status(self, analysis_id, *, delivered, detail=None):
+        raise RuntimeError("Simulated DB error marking delivery status")
+
+
+def test_deliver_mark_status_failure_does_not_affect_result():
+    """mark_delivery_status() is best-effort: its failure must not flip delivered=False."""
+    config = _config()
+    repo = _FailingMarkStatusRepo(config, client=FakeSupabaseClient())
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_mark_fail",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-04-02T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="📋 Готово.",
+    )
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+    result = deliver_today(config, date_str="2026-04-02", repo=repo, telegram=telegram)
+    assert result["delivered"] is True
+    assert result["status"] == "delivered"
+    assert len(session.calls) == 1  # report still reached Telegram
+
+
+class _FailSecondCallTelegramSession:
+    """Succeeds on the first call (report), fails on the second (analytics)."""
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, json=None, timeout=None):
+        self.calls.append(json)
+        if len(self.calls) == 2:
+            # Use 403 (not 400, not a transient status) so TelegramClient returns
+            # an immediate hard failure without retrying as plain text.
+            return FakeResponse(
+                status_code=403,
+                payload={"ok": False, "description": "bot was blocked by the user"},
+            )
+        return FakeResponse()
+
+
+def test_deliver_analytics_failure_delivery_still_succeeds():
+    """Analytics Telegram failure must not mark the whole delivery as failed."""
+    config = _config()
+    repo = _repo()
+    repo.client.store["mtg_participants"] = [
+        {"full_name": "Эмилия Аванесян", "is_internal": True,
+         "metadata": {"role": "руководитель"}},
+    ]
+    source = repo.ensure_source("timeless")
+    meeting = repo.upsert_meeting(
+        source_id=source["id"],
+        source_meeting_id="manual_analytics_fail",
+        title="Планёрка",
+        status="completed",
+        actual_start="2026-04-03T05:00:00+00:00",
+        raw_transcript={"type": "full_transcript", "text": "t"},
+    )
+    repo.create_analysis(
+        meeting_id=meeting["id"],
+        status="completed",
+        telegram_report_md="fallback",
+        ai_metadata={"report_extras": {
+            "effectiveness": {"score": 5, "criteria": [
+                {"criterion": "Все сотрудники высказались", "status": "не выполнено"}]},
+            "participant_breakdown": [
+                {"name": "Эмилия", "participated": True, "yesterday": "x",
+                 "today_plan": [], "blockers": ["нет"]}],
+        }},
+    )
+    session = _FailSecondCallTelegramSession()
+    telegram = TelegramClient(config, session=session, sleep=lambda _: None)
+    result = deliver_today(config, date_str="2026-04-03", repo=repo, telegram=telegram)
+    # Report itself succeeded.
+    assert result["delivered"] is True
+    assert result["status"] == "delivered"
+    # Analytics failed (best-effort), but delivery is not affected.
+    assert result["analytics_sent"] is False
+    assert len(session.calls) == 2  # both attempts were made
+
+
+def test_get_team_roster_null_and_non_dict_metadata():
+    """Null, missing, and non-dict metadata values in mtg_participants are safe."""
+    repo = _repo()
+    repo.client.store["mtg_participants"] = [
+        # null metadata → falls back to empty role → included (no role = not excluded)
+        {"full_name": "Наира Бухгалтер", "is_internal": True, "metadata": None},
+        # non-dict metadata (string) → treated as no metadata
+        {"full_name": "Оля Бухгалтер", "is_internal": True, "metadata": "invalid"},
+        # no metadata key at all
+        {"full_name": "Тагуи Бухгалтер", "is_internal": True},
+        # external participant without metadata — must be excluded
+        {"full_name": "Клиент Внешний", "is_internal": False, "metadata": None},
+    ]
+    roster = repo.get_team_roster()
+    names = {r["name"] for r in roster}
+    # All three internal participants with placeholder surname must appear as first name.
+    assert names == {"Наира", "Оля", "Тагуи"}
+    # No crashes from None/string metadata.
+    for entry in roster:
+        assert isinstance(entry["name"], str) and entry["name"]
+
+
+def test_retry_loop_also_retries_on_delivery_failed():
+    """delivery_failed (transient Telegram error) must trigger a retry, not abort."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import importlib
+    import types
+
+    # Build a minimal fake module namespace so run_daily_meeting_report imports cleanly.
+    calls = []
+
+    def fake_deliver_today(config, *, date_str=None, **_kw):
+        calls.append(len(calls))
+        # First call: Telegram refused; second call: success.
+        if len(calls) == 1:
+            return {"status": "delivery_failed", "delivered": False, "ok": False}
+        return {"status": "delivered", "delivered": True, "ok": True}
+
+    # Patch deliver at module level before importing the script.
+    import meeting_pipeline.deliver as deliver_mod
+    original = deliver_mod.deliver_today
+    deliver_mod.deliver_today = fake_deliver_today
+    try:
+        # Re-import the script module with patched deliver.
+        script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_daily_meeting_report.py"
+        spec = importlib.util.spec_from_file_location("run_daily_meeting_report", script_path)
+        script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script)
+
+        slept = []
+        config = _config()
+        summary: dict = {}
+
+        class _Args:
+            file = None; title = None; date = "2026-04-04"
+            language = None; source_meeting_id = None
+            force = False
+            skip_ingest = True; skip_analyze = True; skip_deliver = False
+
+        # Run once — should fail with delivery_failed.
+        script._run_pipeline(config, _Args(), summary)
+        assert summary["deliver"]["status"] == "delivery_failed"
+
+        # The retry loop must continue on delivery_failed.
+        _RETRY_STATUSES = script._RETRY_STATUSES
+        assert "delivery_failed" in _RETRY_STATUSES
+
+        # Simulate one retry cycle: deliver should now succeed.
+        script._run_pipeline(config, _Args(), summary)
+        assert summary["deliver"]["status"] == "delivered"
+        assert len(calls) == 2
+    finally:
+        deliver_mod.deliver_today = original
+
+
+# --------------------------------------------------------------------------- #
 # Manual runner (no pytest required)
 # --------------------------------------------------------------------------- #
 def _run_all():

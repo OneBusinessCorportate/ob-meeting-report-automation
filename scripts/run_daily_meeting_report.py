@@ -39,6 +39,7 @@ log = get_logger("scripts.daily")
 
 _RETRY_INTERVAL = 30 * 60   # 30 minutes between retries
 _MAX_RETRIES = 4             # covers 11:30 → 13:30 Armenia (4 × 30 min)
+_RETRY_STATUSES = {"report_not_found", "notice_already_sent", "delivery_failed"}
 
 
 def _run_pipeline(config, args: argparse.Namespace, summary: dict) -> None:
@@ -132,16 +133,16 @@ def main() -> int:
 
     _run_pipeline(config, args, summary)
 
-    # Retry every 30 minutes ONLY when the report was not found (negative case).
-    # When delivery succeeds, the loop breaks immediately — no pointless retries.
+    # Retry every 30 minutes for transient failures — report not in DB yet, or
+    # Telegram rejected the send. Breaks immediately on success or permanent states.
     # All pipeline steps are idempotent, so re-running is safe.
     for retry_num in range(1, _MAX_RETRIES + 1):
         deliver_status = summary.get("deliver", {}).get("status")
-        if deliver_status not in ("report_not_found", "notice_already_sent"):
+        if deliver_status not in _RETRY_STATUSES:
             break
         log.info(
-            "Report not found — retry %d/%d in %d min (sleeping).",
-            retry_num, _MAX_RETRIES, _RETRY_INTERVAL // 60,
+            "Delivery pending (%s) — retry %d/%d in %d min (sleeping).",
+            deliver_status, retry_num, _MAX_RETRIES, _RETRY_INTERVAL // 60,
         )
         time.sleep(_RETRY_INTERVAL)
         _run_pipeline(config, args, summary)
