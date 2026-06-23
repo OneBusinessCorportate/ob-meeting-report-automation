@@ -1672,7 +1672,7 @@ def test_verifications_block_confirmed():
     assert "✅ Стелла" in text
     # No detail lines for confirmed entries
     assert "Эмилия:" not in text
-    assert "Сказал(а):" not in text
+    assert "Сказали:" not in text
 
 
 def test_verifications_block_unconfirmed():
@@ -1697,7 +1697,7 @@ def test_verifications_block_unconfirmed():
     assert "22.06" in text
     assert "Оля" in text
     assert "Эмилия:" in text
-    assert "Сказал(а):" in text
+    assert "Сказали:" in text
     assert "База:" in text
     assert "нет активности" in text
     assert "⚠️" not in text  # no emojis

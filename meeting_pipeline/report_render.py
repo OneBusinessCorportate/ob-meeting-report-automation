@@ -256,7 +256,7 @@ def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
         if manager_task:
             lines.append(f"Эмилия: {manager_task}")
         if accountant_said:
-            lines.append(f"Сказал(а): {accountant_said}")
+            lines.append(f"Сказали: {accountant_said}")
         if db_shows:
             lines.append(f"База: {db_shows}")
         lines.append("")
