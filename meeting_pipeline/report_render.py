@@ -353,6 +353,13 @@ def _accountant_blocks(
 
 def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> List[str]:
     reactions = data.get("manager_reactions") or []
+    # First names of participants who were NOT at the meeting — manager comments
+    # addressed to absent people are skipped (they couldn't hear the feedback).
+    absent_firsts = {
+        _first_name(e.get("name")).lower()
+        for e in (data.get("participant_breakdown") or [])
+        if not e.get("participated") and _first_name(e.get("name"))
+    }
     grouped: Dict[str, List[str]] = {}
     order: List[str] = []
     for reaction in reactions:
@@ -362,6 +369,8 @@ def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> Li
         to_whom = _clean(reaction.get("to_whom")) or "Общее"
         key = "Общее" if to_whom.lower() in {"общее", "все", "всем", "команда", "команде"} \
             else _person(to_whom, roster_firsts)
+        if key.lower() in absent_firsts:
+            continue
         if key not in grouped:
             grouped[key] = []
             order.append(key)
