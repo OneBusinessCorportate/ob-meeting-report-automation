@@ -357,8 +357,7 @@ def _score_block(data: Dict[str, Any]) -> List[str]:
         if out:
             out.append("")  # blank line above so the talk-share line stands out
         out.append(
-            f"Кто сколько говорил: {manager_pct or 0}% руководитель, "
-            f"{accountants_pct or 0}% бухгалтеры"
+            f"Говорят: {manager_pct or 0}% руководитель · {accountants_pct or 0}% бухгалтеры"
         )
     if out:
         out.append("")
@@ -414,17 +413,17 @@ def _accountant_blocks(
         name = _first_name(entry.get("name"))
         if not entry.get("participated"):
             # One line per absentee, listed together at the top of the section.
-            out.append(f"👤 {name} - не принимал(а) участия.")
+            out.append(f"👤 {name} — не участвовал(а)")
             continue
         if out and not absent_done:
             out.append("")  # close the absentee group with one blank line
         absent_done = True
         out.append(f"👤 {name}")
-        out += _field_lines("Отчёт за вчера", entry.get("yesterday"))
-        out += _field_lines("План на сегодня", entry.get("today_plan"))
+        out += _field_lines("Вчера", entry.get("yesterday"))
+        out += _field_lines("Сегодня", entry.get("today_plan"))
         out += _field_lines("Блокеры", entry.get("blockers"))
-        out += _optional_field_lines("Нужна помощь", entry.get("needs_help"))
-        out += _optional_field_lines("Вопрос руководителю", entry.get("question_to_manager"))
+        out += _optional_field_lines("Помощь", entry.get("needs_help"))
+        out += _optional_field_lines("Вопрос", entry.get("question_to_manager"))
         out.append("")
     if out and out[-1] != "":
         out.append("")
@@ -458,15 +457,14 @@ def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> Li
     if not grouped:
         return []
 
-    out = [f"🧭 ЧТО СКАЗАЛА РУКОВОДИТЕЛЬ ({manager.upper()})"]
-    # «Общее» first, then per person: the name on its own line, every remark
-    # on its own line below (numbered when there is more than one).
+    out = [f"🗣 СКАЗАЛА {manager.upper()}"]
+    # «Общее» first, then per person. Single remark → inline; multiple → numbered.
     for key in (["Общее"] if "Общее" in grouped else []) + [k for k in order if k != "Общее"]:
-        out.append(f"{key}:")
         texts = grouped[key]
         if len(texts) == 1:
-            out.append(texts[0])
+            out.append(f"{key}: {texts[0]}")
         else:
+            out.append(f"{key}:")
             out.extend(f"{i}. {text}" for i, text in enumerate(texts, start=1))
     out.append("")
     return out
