@@ -411,12 +411,12 @@ def _accountant_blocks(
     for entry in entries:
         name = _first_name(entry.get("name"))
         if not entry.get("participated"):
-            out.append(f"{name} — не участвовал(а)")
+            out.append(f"👤 {name} — не участвовал(а)")
             continue
         if out and not absent_done:
             out.append("")  # close the absentee group with one blank line
         absent_done = True
-        out.append(name)
+        out.append(f"👤 {name}")
         out += ["  " + l for l in _field_lines("Вчера", entry.get("yesterday"))]
         out += ["  " + l for l in _field_lines("Сегодня", entry.get("today_plan"))]
         out += ["  " + l for l in _field_lines("Блокеры", entry.get("blockers"))]
@@ -455,7 +455,7 @@ def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> Li
     if not grouped:
         return []
 
-    out = [f"{manager.upper()}"]
+    out = [f"🗣 {manager.upper()}"]
     for key in (["Общее"] if "Общее" in grouped else []) + [k for k in order if k != "Общее"]:
         texts = grouped[key]
         if len(texts) == 1:
@@ -474,9 +474,11 @@ def _risks_block(data: Dict[str, Any]) -> List[str]:
     # Critical situations first: high -> medium -> low (stable within a level).
     severity_rank = {"high": 0, "medium": 1, "low": 2}
     risks.sort(key=lambda r: severity_rank.get(_clean(r.get("severity")).lower(), 1))
-    out = ["РИСКИ", ""]
+    out = ["⚠️ РИСКИ", ""]
     for i, risk in enumerate(risks, start=1):
-        out.append(f"  {i}. {_clean(risk.get('text'))}")
+        severity = _clean(risk.get("severity")).lower()
+        icon = _SEVERITY_ICONS.get(severity, "🟡")
+        out.append(f"  {icon} {i}. {_clean(risk.get('text'))}")
         out.append(f"  Решение: {_value_or_cross(risk.get('decision'))}")
         out.append("")
     return out
@@ -496,7 +498,7 @@ def _tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
             order.append(assignee)
         grouped[assignee].append(item)
 
-    out = ["ЗАДАЧИ"]
+    out = ["📌 ЗАДАЧИ"]
     for assignee in order:
         tasks = grouped[assignee]
         if len(tasks) == 1:
@@ -690,7 +692,7 @@ def _manager_conduct_lines(
 
     if not body:  # nothing assessable about facilitation -> no empty header
         return []
-    return ["КАК ВЕЛА ВСТРЕЧУ"] + ["  " + l for l in body]
+    return ["🧭 КАК ВЕЛА ВСТРЕЧУ"] + ["  " + l for l in body]
 
 
 def _accountant_tasks_lines(
@@ -741,7 +743,7 @@ def _accountant_tasks_lines(
 
     if silent:
         body.append(f"Промолчали: {', '.join(silent)}")
-    return ["БУХГАЛТЕРЫ"] + ["  " + l for l in body]
+    return ["🧑‍💼 БУХГАЛТЕРЫ"] + ["  " + l for l in body]
 
 
 def _improve_lines(
@@ -797,7 +799,7 @@ def _improve_lines(
 
     if not tips:
         return []
-    return ["НА СЛЕДУЮЩЕЙ"] + [f"  – {tip}" for tip in tips]
+    return ["💡 НА СЛЕДУЮЩЕЙ"] + [f"  – {tip}" for tip in tips]
 
 
 def _analytics_block(
@@ -843,7 +845,7 @@ def _open_questions_block(data: Dict[str, Any]) -> List[str]:
     questions = [q for q in questions if q.lower() not in _MISSING_WORDS]
     if not questions:
         return []
-    return ["ВОПРОСЫ"] + [f"  – {q}" for q in questions] + [""]
+    return ["❓ ВОПРОСЫ"] + [f"  – {q}" for q in questions] + [""]
 
 
 def _finalize(lines: List[str]) -> str:
