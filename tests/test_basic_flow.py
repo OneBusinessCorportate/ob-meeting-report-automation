@@ -1553,6 +1553,74 @@ def test_retry_loop_also_retries_on_delivery_failed():
         deliver_mod.deliver_today = original
 
 
+def test_manager_block_skips_comments_about_absent_participants():
+    """Manager reactions to absent people must NOT appear in the rendered report."""
+    from meeting_pipeline.report_render import render_telegram_report
+
+    data = {
+        "effectiveness": {"score": 6, "criteria": [
+            {"criterion": "Все сотрудники высказались", "status": "частично"},
+            {"criterion": "Руководитель задавала вопросы", "status": "выполнено"},
+            {"criterion": "Руководитель поставила задачи", "status": "выполнено"},
+            {"criterion": "Руководитель поделилась новостями", "status": "не выполнено"},
+            {"criterion": "Руководитель кого-то похвалила", "status": "не выполнено"},
+            {"criterion": "Руководитель спросила про прошлые задачи", "status": "не выполнено"},
+        ]},
+        "participant_breakdown": [
+            {"name": "Стелла", "participated": True,
+             "yesterday": "Подготовила акты.", "today_plan": [], "blockers": ["нет"]},
+            # Наира was absent
+            {"name": "Наира", "participated": False,
+             "yesterday": "", "today_plan": [], "blockers": []},
+        ],
+        "manager_reactions": [
+            {"to_whom": "Стелла", "type": "рекомендация",
+             "text": "Отправить акты сегодня до обеда."},
+            # This comment is about absent Наира — must be filtered out
+            {"to_whom": "Наира", "type": "критика",
+             "text": "Снова не пришла без предупреждения."},
+            {"to_whom": "Общее", "type": "задача",
+             "text": "Все фиксируют переписку с клиентами в CRM."},
+        ],
+    }
+    team_roster = [
+        {"name": "Эмилия Аванесян", "role": "руководитель"},
+        {"name": "Стелла"},
+        {"name": "Наира"},
+    ]
+    text = render_telegram_report(data, meeting_date="2026-06-23",
+                                  team_roster=team_roster, prior_stats=[],
+                                  include_analytics=False)
+    # Comment about present Стелла must appear.
+    assert "Стелла" in text
+    assert "Отправить акты сегодня до обеда" in text
+    # General comment must appear.
+    assert "Все фиксируют переписку с клиентами в CRM" in text
+    # Comment about ABSENT Наира must NOT appear.
+    assert "Снова не пришла без предупреждения" not in text
+
+
+def test_get_team_roster_includes_email():
+    """get_team_roster() must return email when present in mtg_participants."""
+    repo = _repo()
+    repo.client.store["mtg_participants"] = [
+        {"full_name": "Лилит Бухгалтер", "is_internal": True,
+         "email": "lilit@onebusiness.am", "metadata": {"role": "бухгалтер"}},
+        {"full_name": "Стелла Бухгалтер", "is_internal": True,
+         "email": None, "metadata": {"role": "бухгалтер"}},
+        {"full_name": "Эмилия Аванесян", "is_internal": True,
+         "email": "emiliya@onebusiness.am", "metadata": {"role": "руководитель"}},
+    ]
+    roster = repo.get_team_roster()
+    by_name = {r["name"]: r for r in roster}
+    # Лилит has email → must be in roster entry.
+    assert by_name["Лилит"]["email"] == "lilit@onebusiness.am"
+    # Эмилия Аванесян has a real surname → kept as full name in roster key.
+    assert by_name["Эмилия Аванесян"]["email"] == "emiliya@onebusiness.am"
+    # Стелла has null email → no "email" key in the roster entry.
+    assert "email" not in by_name["Стелла"]
+
+
 # --------------------------------------------------------------------------- #
 # Manual runner (no pytest required)
 # --------------------------------------------------------------------------- #

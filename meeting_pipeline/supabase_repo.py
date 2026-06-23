@@ -89,7 +89,7 @@ class SupabaseRepo:
         placeholder_surnames = {"бухгалтер", "менеджер", "руководитель"}
         rows = (
             self.client.table("mtg_participants")
-            .select("full_name, metadata")
+            .select("full_name, email, metadata")
             .eq("is_internal", True)
             .execute()
         ).data or []
@@ -105,7 +105,11 @@ class SupabaseRepo:
             parts = name.split()
             if len(parts) > 1 and parts[-1].lower() in placeholder_surnames:
                 name = " ".join(parts[:-1])
-            roster.append({"name": name, "role": role})
+            entry: Dict[str, str] = {"name": name, "role": role}
+            email = (row.get("email") or "").strip()
+            if email:
+                entry["email"] = email
+            roster.append(entry)
         return roster
 
     # --- Meetings (L1) --------------------------------------------------------
