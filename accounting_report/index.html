@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OB Бухгалтерия — Отчетность по компаниям</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --blue:    #1E5FA8;
+    --blue-lt: #EBF2FC;
+    --green:   #16A34A;
+    --amber:   #D97706;
+    --red:     #DC2626;
+    --gray-50: #F9FAFB;
+    --gray-100:#F3F4F6;
+    --gray-200:#E5E7EB;
+    --gray-400:#9CA3AF;
+    --gray-600:#4B5563;
+    --gray-800:#1F2937;
+    --radius:  8px;
+    --shadow:  0 1px 3px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.08);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    color: var(--gray-800);
+    background: var(--gray-50);
+    min-height: 100vh;
+  }
+
+  /* ---- Header ---- */
+  .header {
+    background: var(--blue);
+    color: #fff;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.2);
+  }
+  .header-logo {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.5px;
+  }
+  .header-subtitle {
+    font-size: 13px;
+    opacity: .8;
+  }
+  .header-spacer { flex: 1; }
+  .header-date {
+    font-size: 13px;
+    opacity: .75;
+  }
+
+  /* ---- Page wrap ---- */
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 20px 24px 48px; }
+
+  /* ---- Tabs ---- */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 2px solid var(--gray-200);
+    margin-bottom: 20px;
+  }
+  .tab-btn {
+    padding: 10px 20px;
+    border: none;
+    background: none;
+    font-size: 14px;
+    color: var(--gray-600);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    transition: color .15s, border-color .15s;
+  }
+  .tab-btn:hover { color: var(--blue); }
+  .tab-btn.active {
+    color: var(--blue);
+    border-bottom-color: var(--blue);
+    font-weight: 600;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ---- Filters ---- */
+  .filters {
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-end;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .filter-group label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--gray-600);
+  }
+  .filter-group input,
+  .filter-group select {
+    padding: 8px 12px;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    font-size: 14px;
+    color: var(--gray-800);
+    background: var(--gray-50);
+    min-width: 160px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .filter-group input:focus,
+  .filter-group select:focus { border-color: var(--blue); background: #fff; }
+
+  .filter-actions { display: flex; gap: 8px; align-items: flex-end; }
+
+  .btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: var(--blue); color: #fff; }
+  .btn-primary:hover { opacity: .9; }
+  .btn-secondary {
+    background: var(--gray-100);
+    color: var(--gray-800);
+    border: 1px solid var(--gray-200);
+  }
+  .btn-secondary:hover { background: var(--gray-200); }
+  .btn-success { background: var(--green); color: #fff; }
+  .btn-success:hover { opacity: .9; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+
+  /* ---- Summary cards ---- */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .card.blue::before { background: var(--blue); }
+  .card.green::before { background: var(--green); }
+  .card.amber::before { background: var(--amber); }
+  .card.red::before { background: var(--red); }
+  .card.gray::before { background: var(--gray-400); }
+  .card-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--gray-600);
+    margin-bottom: 8px;
+  }
+  .card-value {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--gray-800);
+  }
+  .card-sub {
+    font-size: 12px;
+    color: var(--gray-400);
+    margin-top: 6px;
+  }
+
+  /* ---- Table ---- */
+  .table-wrap {
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .table-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--gray-200);
+    gap: 12px;
+  }
+  .table-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--gray-800);
+  }
+  .table-count {
+    font-size: 12px;
+    color: var(--gray-400);
+  }
+  .table-search {
+    padding: 6px 12px;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    font-size: 13px;
+    width: 220px;
+    outline: none;
+  }
+  .table-search:focus { border-color: var(--blue); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  thead {
+    background: var(--gray-50);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  th {
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--gray-600);
+    border-bottom: 1px solid var(--gray-200);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th:hover { color: var(--blue); }
+  th.sorted-asc::after { content: ' ↑'; }
+  th.sorted-desc::after { content: ' ↓'; }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--gray-100);
+    vertical-align: middle;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--blue-lt); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-blue   { background: var(--blue-lt); color: var(--blue); }
+  .badge-gray   { background: var(--gray-100); color: var(--gray-600); }
+  .badge-green  { background: #DCFCE7; color: var(--green); }
+  .badge-amber  { background: #FEF3C7; color: var(--amber); }
+
+  .num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+  .num-good { color: var(--green); font-weight: 600; }
+  .num-zero { color: var(--gray-400); }
+
+  /* ---- Loading / empty states ---- */
+  .loading {
+    text-align: center;
+    padding: 48px;
+    color: var(--gray-400);
+    font-size: 15px;
+  }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--gray-200);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty-state {
+    text-align: center;
+    padding: 48px;
+    color: var(--gray-400);
+  }
+  .empty-state h3 { font-size: 15px; margin-bottom: 6px; color: var(--gray-600); }
+
+  /* ---- Comment form ---- */
+  .form-card {
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow);
+    margin-bottom: 24px;
+  }
+  .form-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--gray-800);
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .form-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gray-600);
+    text-transform: uppercase;
+    letter-spacing: .4px;
+  }
+  .form-field input,
+  .form-field select,
+  .form-field textarea {
+    padding: 9px 12px;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--gray-800);
+    background: var(--gray-50);
+    resize: vertical;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .form-field input:focus,
+  .form-field select:focus,
+  .form-field textarea:focus { border-color: var(--blue); background: #fff; }
+  .form-field textarea { min-height: 80px; }
+
+  /* ---- Comment list ---- */
+  .comment-item {
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    background: #fff;
+  }
+  .comment-meta {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+  .comment-author {
+    font-weight: 600;
+    color: var(--blue);
+    font-size: 13px;
+  }
+  .comment-date {
+    font-size: 12px;
+    color: var(--gray-400);
+  }
+  .comment-company {
+    font-size: 12px;
+    background: var(--blue-lt);
+    color: var(--blue);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .comment-text {
+    font-size: 14px;
+    color: var(--gray-800);
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .comment-unaccounted {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--amber);
+    background: #FEF3C7;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border-left: 3px solid var(--amber);
+  }
+  .comment-unaccounted::before {
+    content: '⚠ Не учтено: ';
+    font-weight: 600;
+  }
+
+  /* ---- Missing companies section ---- */
+  .missing-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .missing-stat {
+    font-size: 15px;
+    color: var(--gray-700);
+  }
+  .missing-stat strong { color: var(--red); font-size: 22px; }
+
+  /* ---- Alert ---- */
+  .alert {
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .alert-info { background: var(--blue-lt); color: var(--blue); border-left: 3px solid var(--blue); }
+  .alert-success { background: #DCFCE7; color: var(--green); border-left: 3px solid var(--green); }
+  .alert-error { background: #FEE2E2; color: var(--red); border-left: 3px solid var(--red); }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <div class="header-logo">OB Бухгалтерия</div>
+    <div class="header-subtitle">Отчетность по компаниям Артема</div>
+  </div>
+  <div class="header-spacer"></div>
+  <div class="header-date" id="headerDate"></div>
+</header>
+
+<div class="wrap">
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('report')">📊 Отчет</button>
+    <button class="tab-btn" onclick="switchTab('missing')">⚠️ Компании без нас</button>
+    <button class="tab-btn" onclick="switchTab('comments')">💬 Комментарии</button>
+  </div>
+
+  <!-- ============================== TAB: Report ============================== -->
+  <div id="tab-report" class="tab-panel active">
+
+    <!-- Filters -->
+    <div class="filters">
+      <div class="filter-group">
+        <label>Дата с</label>
+        <input type="date" id="dateFrom">
+      </div>
+      <div class="filter-group">
+        <label>Дата по</label>
+        <input type="date" id="dateTo">
+      </div>
+      <div class="filter-group">
+        <label>Бухгалтер</label>
+        <select id="accountantFilter">
+          <option value="">— Все бухгалтеры —</option>
+        </select>
+      </div>
+      <div class="filter-actions">
+        <button class="btn btn-primary" onclick="applyFilters()">Применить</button>
+        <button class="btn btn-secondary" onclick="resetFilters()">Сброс</button>
+        <button class="btn btn-secondary" onclick="exportCSV()">⬇ CSV</button>
+      </div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="cards">
+      <div class="card blue">
+        <div class="card-label">Компании (Артем)</div>
+        <div class="card-value" id="cardCompanies">—</div>
+        <div class="card-sub">всего в базе Армсофт</div>
+      </div>
+      <div class="card green">
+        <div class="card-label">Выписано инвойсов</div>
+        <div class="card-value" id="cardInvoices">—</div>
+        <div class="card-sub">Армсофт</div>
+      </div>
+      <div class="card amber">
+        <div class="card-label">Сдано отчетности</div>
+        <div class="card-value" id="cardReports">—</div>
+        <div class="card-sub">ТаксСервис — сданные формы</div>
+      </div>
+      <div class="card red">
+        <div class="card-label">Подано заявлений</div>
+        <div class="card-value" id="cardApps">—</div>
+        <div class="card-sub">ТаксСервис — сохраненные</div>
+      </div>
+      <div class="card gray">
+        <div class="card-label">Изменений остатков</div>
+        <div class="card-value" id="cardBalance">—</div>
+        <div class="card-sub">единый налоговый счёт</div>
+      </div>
+    </div>
+
+    <!-- Main table -->
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <div>
+          <span class="table-title">По компаниям</span>
+          <span class="table-count" id="tableCount"></span>
+        </div>
+        <input class="table-search" type="text" placeholder="Поиск по компании…" id="tableSearch" oninput="filterTable()">
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortTable('company_name')">Компания</th>
+              <th onclick="sortTable('primary_accountant')">Бухгалтер</th>
+              <th class="num-cell" onclick="sortTable('invoice_count')" title="Выписано инвойсов (Армсофт)">Инвойсы</th>
+              <th class="num-cell" onclick="sortTable('report_count')" title="Сдано отчетности (ТаксСервис)">Отчеты</th>
+              <th class="num-cell" onclick="sortTable('application_count')" title="Подано заявлений (ТаксСервис)">Заявления</th>
+              <th class="num-cell" onclick="sortTable('balance_change_count')" title="Изменений остатков">Остатки</th>
+            </tr>
+          </thead>
+          <tbody id="reportBody">
+            <tr><td colspan="6">
+              <div class="loading"><div class="spinner"></div>Загрузка данных…</div>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-report -->
+
+  <!-- ============================== TAB: Missing ============================== -->
+  <div id="tab-missing" class="tab-panel">
+
+    <div class="alert alert-info">
+      Здесь отображаются компании, которые есть у Артема в Армсофт, но <strong>не зарегистрированы</strong> в нашей таблице бухгалтерии (<code>ob_accounting_companies</code>). Добавьте компанию через форму ниже.
+    </div>
+
+    <div class="missing-header">
+      <div class="missing-stat">
+        Компаний без нас: <strong id="missingCount">—</strong> из <span id="totalForMissing">—</span>
+      </div>
+      <button class="btn btn-secondary" onclick="loadMissing()">🔄 Обновить</button>
+    </div>
+
+    <!-- Add company form -->
+    <div class="form-card">
+      <h3>➕ Добавить компанию в нашу таблицу</h3>
+      <div id="missingAlert"></div>
+      <div class="form-row">
+        <div class="form-field">
+          <label>Название компании *</label>
+          <input type="text" id="obCompanyName" placeholder="Точно как у Артема">
+        </div>
+        <div class="form-field">
+          <label>Номер договора</label>
+          <input type="text" id="obContractNumber" placeholder="OB-2025-123">
+        </div>
+        <div class="form-field">
+          <label>Бухгалтер</label>
+          <select id="obAccountant">
+            <option value="">— выберите —</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-field">
+          <label>Заметки</label>
+          <input type="text" id="obNotes" placeholder="Необязательно">
+        </div>
+      </div>
+      <button class="btn btn-success" onclick="addOBCompany()">Добавить</button>
+    </div>
+
+    <!-- Missing companies table -->
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <span class="table-title">Компании Артема, которых нет у нас</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Компания</th>
+              <th>Код (Армсофт)</th>
+              <th>Статус</th>
+              <th>Действие</th>
+            </tr>
+          </thead>
+          <tbody id="missingBody">
+            <tr><td colspan="4"><div class="loading"><div class="spinner"></div>Загрузка…</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /tab-missing -->
+
+  <!-- ============================== TAB: Comments ============================== -->
+  <div id="tab-comments" class="tab-panel">
+
+    <!-- Add comment form -->
+    <div class="form-card">
+      <h3>✏️ Добавить комментарий к отчету</h3>
+      <p style="font-size:13px;color:var(--gray-600);margin-bottom:16px;">
+        Каждый бухгалтер ежедневно вносит комментарий — что сделано за день, что не отражено в данной таблице.
+      </p>
+      <div id="commentAlert"></div>
+      <div class="form-row">
+        <div class="form-field">
+          <label>Email бухгалтера *</label>
+          <select id="commentAccountant">
+            <option value="">— выберите бухгалтера —</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Дата *</label>
+          <input type="date" id="commentDate">
+        </div>
+        <div class="form-field">
+          <label>Компания (необязательно)</label>
+          <select id="commentCompany">
+            <option value="">— общий комментарий —</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-field">
+          <label>Комментарий к отчету *</label>
+          <textarea id="commentText" placeholder="Что сделано за день…"></textarea>
+        </div>
+        <div class="form-field">
+          <label>Что НЕ учтено в таблице</label>
+          <textarea id="commentUnaccounted" placeholder="Работа, не отраженная в выгрузке Артема (если есть)…"></textarea>
+        </div>
+      </div>
+      <button class="btn btn-success" onclick="addComment()">Сохранить комментарий</button>
+    </div>
+
+    <!-- Comments list -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div style="font-weight:600;font-size:15px;">Последние комментарии</div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="commentsFilterAccountant" onchange="loadComments()" style="padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:13px;">
+          <option value="">Все бухгалтеры</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="loadComments()">🔄</button>
+      </div>
+    </div>
+    <div id="commentsList">
+      <div class="loading"><div class="spinner"></div>Загрузка комментариев…</div>
+    </div>
+
+  </div><!-- /tab-comments -->
+
+</div><!-- /wrap -->
+
+<script>
+// ============================================================
+// Config
+// ============================================================
+const SUPABASE_URL  = 'https://rbtvbsbcycdlwmrzjwun.supabase.co';
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJidHZic2JjeWNkbHdtcnpqd3VuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzOTg2MDYsImV4cCI6MjA5NTk3NDYwNn0.Aw6cLYNiQRNVahANyUkXehFwQI9oyUW9Hj2xjELWwk0';
+
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ============================================================
+// State
+// ============================================================
+let reportData    = [];
+let filteredData  = [];
+let accountants   = [];
+let sortCol       = 'company_name';
+let sortDir       = 'asc';
+let allCompanies  = [];
+
+// ============================================================
+// Helpers
+// ============================================================
+function fmt(n) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('ru-RU');
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function armenianToday() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Yerevan' }))
+    .toISOString().slice(0, 10);
+}
+
+function showAlert(elId, msg, type = 'info') {
+  const el = document.getElementById(elId);
+  el.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+  setTimeout(() => { el.innerHTML = ''; }, 5000);
+}
+
+// ============================================================
+// Init
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+  // Header date (Armenia TZ)
+  document.getElementById('headerDate').textContent =
+    new Date().toLocaleDateString('ru-RU', { timeZone: 'Asia/Yerevan', dateStyle: 'long' });
+
+  // Set default date range: current month
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Yerevan' }));
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  document.getElementById('dateFrom').value = firstDay;
+  document.getElementById('dateTo').value   = armenianToday();
+  document.getElementById('commentDate').value = armenianToday();
+
+  await Promise.all([loadAccountants(), applyFilters()]);
+});
+
+// ============================================================
+// Tab switching
+// ============================================================
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`#tab-${name}`).classList.add('active');
+
+  // Find and activate the clicked button
+  const btns = document.querySelectorAll('.tab-btn');
+  const labels = { report: 0, missing: 1, comments: 2 };
+  btns[labels[name]].classList.add('active');
+
+  if (name === 'missing')  loadMissing();
+  if (name === 'comments') loadComments();
+}
+
+// ============================================================
+// Accountant list
+// ============================================================
+async function loadAccountants() {
+  const { data, error } = await db.rpc('get_accountant_list');
+  if (error) { console.error(error); return; }
+  accountants = data || [];
+
+  const selectors = [
+    'accountantFilter', 'obAccountant',
+    'commentAccountant', 'commentsFilterAccountant'
+  ];
+  selectors.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const firstOpt = el.options[0];
+    el.innerHTML = '';
+    el.appendChild(firstOpt);
+    accountants.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.accountant_email;
+      const label = a.accountant_email === 'acc@onebusiness.am'
+        ? `Общий аккаунт OB (${a.companies_count} компаний)`
+        : `${a.accountant_email} (${a.companies_count} компаний)`;
+      opt.textContent = label;
+      el.appendChild(opt);
+    });
+  });
+}
+
+// ============================================================
+// Main report
+// ============================================================
+async function applyFilters() {
+  const dateFrom   = document.getElementById('dateFrom').value   || null;
+  const dateTo     = document.getElementById('dateTo').value     || null;
+  const accountant = document.getElementById('accountantFilter').value || null;
+
+  // Summary stats (quick totals)
+  const { data: stats } = await db.rpc('get_summary_stats', {
+    p_date_from: dateFrom, p_date_to: dateTo, p_accountant: accountant
+  });
+  if (stats && stats[0]) {
+    const s = stats[0];
+    document.getElementById('cardCompanies').textContent = fmt(s.total_companies);
+    document.getElementById('cardInvoices').textContent  = fmt(s.total_invoices);
+    document.getElementById('cardReports').textContent   = fmt(s.total_reports);
+    document.getElementById('cardApps').textContent      = fmt(s.total_applications);
+    document.getElementById('cardBalance').textContent   = fmt(s.total_balance_changes);
+  }
+
+  // Per-company data
+  setLoading('reportBody', 6);
+  const { data, error } = await db.rpc('get_accounting_report', {
+    p_date_from: dateFrom, p_date_to: dateTo, p_accountant: accountant
+  });
+  if (error) {
+    document.getElementById('reportBody').innerHTML =
+      `<tr><td colspan="6"><div class="alert alert-error">Ошибка: ${error.message}</div></td></tr>`;
+    return;
+  }
+
+  reportData   = data || [];
+  filteredData = [...reportData];
+  allCompanies = reportData.map(r => ({ id: r.company_id, name: r.company_name }));
+  populateCompanySelect();
+
+  renderReport();
+}
+
+function populateCompanySelect() {
+  const sel = document.getElementById('commentCompany');
+  const first = sel.options[0];
+  sel.innerHTML = '';
+  sel.appendChild(first);
+  allCompanies.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    sel.appendChild(opt);
+  });
+}
+
+function resetFilters() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Yerevan' }));
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  document.getElementById('dateFrom').value = firstDay;
+  document.getElementById('dateTo').value   = armenianToday();
+  document.getElementById('accountantFilter').value = '';
+  document.getElementById('tableSearch').value = '';
+  applyFilters();
+}
+
+// ============================================================
+// Table rendering + sorting + search
+// ============================================================
+function renderReport() {
+  const search = document.getElementById('tableSearch').value.toLowerCase();
+  filteredData = reportData.filter(r =>
+    !search ||
+    (r.company_name || '').toLowerCase().includes(search) ||
+    (r.primary_accountant || '').toLowerCase().includes(search)
+  );
+
+  // Sort
+  filteredData.sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  document.getElementById('tableCount').textContent =
+    ` — ${filteredData.length} компаний`;
+
+  const tbody = document.getElementById('reportBody');
+  if (filteredData.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6">
+      <div class="empty-state"><h3>Нет данных по выбранным фильтрам</h3></div>
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filteredData.map(r => {
+    const acc = r.primary_accountant === 'acc@onebusiness.am'
+      ? '<span class="badge badge-gray">Общий</span>'
+      : `<span class="badge badge-blue" title="${r.primary_accountant}">${shortEmail(r.primary_accountant)}</span>`;
+
+    return `<tr>
+      <td><strong>${r.company_name || r.company_code}</strong></td>
+      <td>${acc}</td>
+      <td class="num-cell ${r.invoice_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.invoice_count)}</td>
+      <td class="num-cell ${r.report_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.report_count)}</td>
+      <td class="num-cell ${r.application_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.application_count)}</td>
+      <td class="num-cell ${r.balance_change_count > 0 ? 'num-good' : 'num-zero'}">${fmt(r.balance_change_count)}</td>
+    </tr>`;
+  }).join('');
+
+  // Update sort indicators
+  document.querySelectorAll('th').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+  });
+}
+
+function filterTable() { renderReport(); }
+
+function sortTable(col) {
+  if (sortCol === col) {
+    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortCol = col;
+    sortDir = col === 'company_name' ? 'asc' : 'desc';
+  }
+  renderReport();
+}
+
+function shortEmail(email) {
+  if (!email) return '—';
+  const parts = email.split('@');
+  return parts[0].length > 16 ? parts[0].slice(0, 14) + '…' : parts[0];
+}
+
+function setLoading(tbodyId, cols) {
+  document.getElementById(tbodyId).innerHTML =
+    `<tr><td colspan="${cols}"><div class="loading"><div class="spinner"></div>Загрузка…</div></td></tr>`;
+}
+
+// ============================================================
+// CSV export
+// ============================================================
+function exportCSV() {
+  if (!filteredData.length) return;
+  const headers = ['Компания', 'Код', 'Бухгалтер', 'Инвойсы (Армсофт)', 'Отчеты (Такс)', 'Заявления (Такс)', 'Изменений остатков'];
+  const rows = filteredData.map(r => [
+    r.company_name, r.company_code, r.primary_accountant,
+    r.invoice_count, r.report_count, r.application_count, r.balance_change_count
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: `ob_report_${today()}.csv` });
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// Missing companies tab
+// ============================================================
+async function loadMissing() {
+  setLoading('missingBody', 4);
+  const { data, error } = await db.rpc('get_missing_companies');
+  if (error) {
+    document.getElementById('missingBody').innerHTML =
+      `<tr><td colspan="4"><div class="alert alert-error">Ошибка: ${error.message}</div></td></tr>`;
+    return;
+  }
+
+  const missing = data || [];
+  document.getElementById('missingCount').textContent  = missing.length;
+  document.getElementById('totalForMissing').textContent =
+    document.getElementById('cardCompanies').textContent;
+
+  if (missing.length === 0) {
+    document.getElementById('missingBody').innerHTML =
+      `<tr><td colspan="4"><div class="empty-state"><h3>Все компании Артема есть в нашей таблице</h3></div></td></tr>`;
+    return;
+  }
+
+  document.getElementById('missingBody').innerHTML = missing.map(c => `
+    <tr>
+      <td><strong>${c.company_name}</strong></td>
+      <td><code style="font-size:12px;color:var(--gray-600)">${c.company_code}</code></td>
+      <td><span class="badge ${c.is_active ? 'badge-green' : 'badge-gray'}">${c.is_active ? 'Активна' : 'Неактивна'}</span></td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="prefillAdd('${c.company_name.replace(/'/g, "\\'")}')">
+          + Добавить к нам
+        </button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function prefillAdd(name) {
+  document.getElementById('obCompanyName').value = name;
+  document.getElementById('obCompanyName').focus();
+  document.getElementById('obCompanyName').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function addOBCompany() {
+  const name = document.getElementById('obCompanyName').value.trim();
+  const contract = document.getElementById('obContractNumber').value.trim();
+  const accountant = document.getElementById('obAccountant').value;
+  const notes = document.getElementById('obNotes').value.trim();
+
+  if (!name) { showAlert('missingAlert', 'Введите название компании', 'error'); return; }
+
+  const { error } = await db.from('ob_accounting_companies').insert({
+    company_name: name,
+    contract_number: contract || null,
+    accountant_email: accountant || null,
+    notes: notes || null
+  });
+
+  if (error) { showAlert('missingAlert', `Ошибка: ${error.message}`, 'error'); return; }
+
+  showAlert('missingAlert', `Компания "${name}" добавлена в нашу таблицу`, 'success');
+  document.getElementById('obCompanyName').value = '';
+  document.getElementById('obContractNumber').value = '';
+  document.getElementById('obAccountant').value = '';
+  document.getElementById('obNotes').value = '';
+  loadMissing();
+}
+
+// ============================================================
+// Comments tab
+// ============================================================
+async function loadComments() {
+  const filterAccountant = document.getElementById('commentsFilterAccountant').value;
+  const el = document.getElementById('commentsList');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка комментариев…</div>';
+
+  let query = db.from('accountant_daily_comments')
+    .select('*')
+    .order('comment_date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  if (filterAccountant) query = query.eq('accountant_email', filterAccountant);
+
+  const { data, error } = await query;
+  if (error) { el.innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+
+  if (!data || data.length === 0) {
+    el.innerHTML = `<div class="empty-state"><h3>Комментариев пока нет</h3></div>`;
+    return;
+  }
+
+  el.innerHTML = data.map(c => `
+    <div class="comment-item">
+      <div class="comment-meta">
+        <span class="comment-author">${c.accountant_email}</span>
+        <span class="comment-date">${formatDate(c.comment_date)}</span>
+        ${c.company_name ? `<span class="comment-company">${c.company_name}</span>` : ''}
+      </div>
+      <div class="comment-text">${escHtml(c.comment)}</div>
+      ${c.unaccounted_work ? `<div class="comment-unaccounted">${escHtml(c.unaccounted_work)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+async function addComment() {
+  const accountant = document.getElementById('commentAccountant').value;
+  const date       = document.getElementById('commentDate').value;
+  const companyId  = document.getElementById('commentCompany').value;
+  const text       = document.getElementById('commentText').value.trim();
+  const unaccounted = document.getElementById('commentUnaccounted').value.trim();
+
+  if (!accountant) { showAlert('commentAlert', 'Выберите бухгалтера', 'error'); return; }
+  if (!date)        { showAlert('commentAlert', 'Выберите дату', 'error'); return; }
+  if (!text)        { showAlert('commentAlert', 'Введите комментарий', 'error'); return; }
+
+  const companyRow = companyId ? allCompanies.find(c => String(c.id) === String(companyId)) : null;
+
+  const { error } = await db.from('accountant_daily_comments').insert({
+    accountant_email: accountant,
+    comment_date:    date,
+    company_id:      companyId ? parseInt(companyId) : null,
+    company_name:    companyRow ? companyRow.name : null,
+    comment:         text,
+    unaccounted_work: unaccounted || null
+  });
+
+  if (error) { showAlert('commentAlert', `Ошибка: ${error.message}`, 'error'); return; }
+
+  showAlert('commentAlert', 'Комментарий сохранен', 'success');
+  document.getElementById('commentText').value      = '';
+  document.getElementById('commentUnaccounted').value = '';
+  loadComments();
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-');
+  return `${d}.${m}.${y}`;
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
