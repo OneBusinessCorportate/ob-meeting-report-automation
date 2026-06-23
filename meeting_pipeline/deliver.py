@@ -90,12 +90,22 @@ def _render_with_current_template(
         except Exception as exc:  # prior stats are best-effort
             log.warning("Could not load prior meeting stats for rendering: %s", exc)
             prior_stats = []
+        try:
+            armsoft_activity = (
+                repo.get_armsoft_portfolio_activity(meeting_date)
+                if meeting_date
+                else []
+            )
+        except Exception as exc:  # cross-check is best-effort
+            log.warning("Could not load Armsoft portfolio activity: %s", exc)
+            armsoft_activity = []
         report_md = render_telegram_report(
             data,
             meeting_date=meeting_date,
             time_range=meeting_time_range(meeting, config.timezone_offset_hours),
             team_roster=team_roster,
             prior_stats=prior_stats,
+            armsoft_activity=armsoft_activity,
             include_analytics=False,
         )
         analytics_md = render_analytics_message(
