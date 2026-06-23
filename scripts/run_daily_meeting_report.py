@@ -3,8 +3,8 @@
 
 This is the script the Render cron job runs at 11:30 Armenia time.
 
-If the report is not ready at 11:30, the script retries every 15 minutes
-(up to 4 times, covering until 12:30 Armenia) so a late transcript is still
+If the report is not ready at 11:30, the script retries every 30 minutes
+(up to 4 times, covering until 13:30 Armenia) so a late transcript is still
 delivered automatically without manual intervention.
 
 Examples:
@@ -37,8 +37,8 @@ from meeting_pipeline.utils import get_logger  # noqa: E402
 
 log = get_logger("scripts.daily")
 
-_RETRY_INTERVAL = 15 * 60   # 15 minutes between retries
-_MAX_RETRIES = 4             # covers 11:30 → 12:30 Armenia (4 × 15 min)
+_RETRY_INTERVAL = 30 * 60   # 30 minutes between retries
+_MAX_RETRIES = 4             # covers 11:30 → 13:30 Armenia (4 × 30 min)
 
 
 def _run_pipeline(config, args: argparse.Namespace, summary: dict) -> None:
@@ -139,7 +139,7 @@ def main() -> int:
         if deliver_status not in ("report_not_found", "notice_already_sent"):
             break
         log.info(
-            "Report not found — retry %d/%d in %d min.",
+            "Report not found — retry %d/%d in %d min (sleeping).",
             retry_num, _MAX_RETRIES, _RETRY_INTERVAL // 60,
         )
         time.sleep(_RETRY_INTERVAL)

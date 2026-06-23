@@ -29,10 +29,20 @@ def main() -> int:
         action="store_true",
         help="Re-send even if this report was already delivered to the chat.",
     )
+    parser.add_argument(
+        "--force-notice",
+        action="store_true",
+        help="Re-send the 'not found' notice even if one was already sent today (for testing).",
+    )
     args = parser.parse_args()
 
     config = load_config()
-    result = deliver_today(config, date_str=args.date, force=args.force)
+    result = deliver_today(
+        config,
+        date_str=args.date,
+        force=args.force,
+        force_notice=args.force_notice,
+    )
 
     log.info(
         "Deliver result: status=%s delivered=%s",

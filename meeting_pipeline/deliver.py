@@ -28,8 +28,8 @@ log = get_logger("meeting_pipeline.deliver")
 
 MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не найден."
 
-# Follow-up line: the bot actively retries every 15 min (up to 4 times).
-MISSING_REPORT_PROMPT = "Бот будет проверять каждые 15 минут и отправит сообщение, как только найдёт отчёт."
+# Follow-up line: the bot actively retries every 30 min (up to 4 times).
+MISSING_REPORT_PROMPT = "Бот будет проверять наличие отчёта каждые 30 минут и отправит сообщение, как только найдёт его."
 
 # People to @-tag when no recording/report is found, so they notice and can act
 # (Lilit and Emiliya). Telegram detects @mentions in plain text regardless of
@@ -111,6 +111,7 @@ def deliver_today(
     *,
     date_str: Optional[str] = None,
     force: bool = False,
+    force_notice: bool = False,
     repo: Optional[SupabaseRepo] = None,
     telegram: Optional[TelegramClient] = None,
 ) -> Dict[str, Any]:
@@ -118,6 +119,8 @@ def deliver_today(
 
     Automatic runs (the cron) send each report at most once; ``force=True``
     (CLI: ``--force``) re-sends deliberately from a manual trigger.
+    ``force_notice=True`` (CLI: ``--force-notice``) re-sends the "not found"
+    notice even if one was already sent today — useful for testing the format.
     """
     repo = repo or SupabaseRepo(config)
     telegram = telegram or TelegramClient(config)
@@ -126,6 +129,8 @@ def deliver_today(
     report = repo.get_today_current_report(on_date)
 
     if not report or not (report.get("telegram_report_md") or "").strip():
+        if force_notice:
+            repo.release_daily_send(on_date, NOTICE_SEND_KIND)
         if not repo.claim_daily_send(on_date, NOTICE_SEND_KIND):
             log.info(
                 "Missing-report notice for %s was already sent today — "
