@@ -1660,8 +1660,9 @@ def test_verifications_block_confirmed():
                 "speaker": "Стелла",
                 "verified_date": "2026-06-22",
                 "verification_status": "confirmed",
-                "notes": "В базе: 2 накладных, 1 нал. документ за вчера.",
-                "discrepancies": [],
+                "manager_task": "провести акты за прошлую неделю",
+                "accountant_said": "все акты проведены",
+                "db_shows": "2 накладных, 1 нал. документ",
             }
         ]
     }
@@ -1670,7 +1671,7 @@ def test_verifications_block_confirmed():
 
 
 def test_verifications_block_unconfirmed():
-    """Compact block renders unconfirmed entry: name + notes, no emojis."""
+    """Compact block renders unconfirmed entry: 3-line format, no emojis."""
     from meeting_pipeline.report_render import _verifications_compact_block
 
     data = {
@@ -1679,8 +1680,9 @@ def test_verifications_block_unconfirmed():
                 "speaker": "Оля",
                 "verified_date": "2026-06-22",
                 "verification_status": "unconfirmed",
-                "notes": "В базе 0 активности за вчера.",
-                "discrepancies": ["Сотрудник сказала, что работала с клиентами, в базе не зафиксировано"],
+                "manager_task": "внести платежи от клиентов",
+                "accountant_said": "работала с клиентами весь день",
+                "db_shows": "нет активности",
             }
         ]
     }
@@ -1689,7 +1691,10 @@ def test_verifications_block_unconfirmed():
     assert "ПРОВЕРКА ПО БАЗЕ" in text
     assert "22.06" in text
     assert "Оля" in text
-    assert "В базе 0 активности" in text
+    assert "Эмилия:" in text
+    assert "Сказал(а):" in text
+    assert "База:" in text
+    assert "нет активности" in text
     assert "⚠️" not in text  # no emojis
     assert "✅" not in text
 
@@ -1701,7 +1706,7 @@ def test_verifications_block_empty_when_all_no_data():
     data = {
         "db_verifications": [
             {"speaker": "Стелла", "verification_status": "no_data",
-             "notes": "", "discrepancies": []},
+             "manager_task": "", "accountant_said": "", "db_shows": ""},
         ]
     }
     assert _verifications_compact_block(data) == []

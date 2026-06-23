@@ -214,7 +214,14 @@ def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
 
 
 def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
-    """Compact DB cross-check for the analytics message — no emojis, discrepancies only."""
+    """Compact DB cross-check for the analytics message — no emojis, discrepancies only.
+
+    Format per accountant (3 lines):
+        Имя:
+        Эмилия: <manager_task>      (omitted when empty)
+        Сказал(а): <accountant_said>
+        База: <db_shows>
+    """
     verifications = [
         v for v in data.get("db_verifications") or []
         if isinstance(v, dict) and _clean(v.get("speaker"))
@@ -232,14 +239,20 @@ def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
             date_label = f" ({_dd_mm(v['verified_date'])})"
             break
 
-    lines: List[str] = [f"ПРОВЕРКА ПО БАЗЕ{date_label}"]
+    lines: List[str] = [f"ПРОВЕРКА ПО БАЗЕ{date_label}", ""]
     for v in discrepant:
         name = _clean(v.get("speaker"))
-        notes = _clean(v.get("notes"))
-        discrepancies = [_clean(d) for d in (v.get("discrepancies") or []) if _clean(d)]
-        text = notes or (discrepancies[0] if discrepancies else "расхождение с базой")
-        lines.append(f"{name}: {text}")
-    lines.append("")
+        manager_task = _clean(v.get("manager_task"))
+        accountant_said = _clean(v.get("accountant_said"))
+        db_shows = _clean(v.get("db_shows"))
+        lines.append(f"{name}:")
+        if manager_task:
+            lines.append(f"Эмилия: {manager_task}")
+        if accountant_said:
+            lines.append(f"Сказал(а): {accountant_said}")
+        if db_shows:
+            lines.append(f"База: {db_shows}")
+        lines.append("")
     return lines
 
 
