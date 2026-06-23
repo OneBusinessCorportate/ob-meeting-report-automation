@@ -185,6 +185,29 @@ def _find_manager(team_roster: Optional[List[Dict[str, Any]]]) -> str:
     return "Эмилия"
 
 
+def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
+    """Armsoft portfolio activity cross-check section."""
+    if not activity:
+        return []
+    date_label = activity[0].get("date", "")
+    lines: List[str] = [f"📊 Активность в Armsoft ({date_label})", ""]
+    for entry in activity:
+        name = entry.get("name") or "?"
+        assigned = entry.get("assigned", 0)
+        active = entry.get("active", 0)
+        docs = entry.get("docs", 0)
+        if assigned == 0:
+            lines.append(f"• {name} — нет назначенных клиентов")
+        elif active == 0:
+            lines.append(f"• {name} — {assigned} кл. | вчера: ⚠️ нет активности")
+        else:
+            lines.append(
+                f"• {name} — {assigned} кл. | вчера: {active} компан., {docs} докум."
+            )
+    lines.append("")
+    return lines
+
+
 def render_telegram_report(
     data: Dict[str, Any],
     *,
@@ -192,6 +215,7 @@ def render_telegram_report(
     time_range: Optional[str] = None,
     team_roster: Optional[List[Dict[str, Any]]] = None,
     prior_stats: Optional[List[Dict[str, Any]]] = None,
+    armsoft_activity: Optional[List[Dict[str, Any]]] = None,
     include_analytics: bool = True,
 ) -> str:
     """Build the full Telegram report text from the structured analysis JSON.
@@ -222,6 +246,8 @@ def render_telegram_report(
     lines += _risks_block(data)
     lines += _tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
+    if armsoft_activity:
+        lines += _armsoft_block(armsoft_activity)
     if include_analytics:
         block = _analytics_block(data, prior_stats, roster_firsts, manager)
         if block:

@@ -39,6 +39,16 @@ class Config:
         default_factory=lambda: _get("SUPABASE_SERVICE_ROLE_KEY")
     )
 
+    # --- Armsoft Supabase (OB Artyom project — cross-check activity) ---
+    # When set, the deliver step fetches yesterday's document activity per
+    # accountant portfolio and appends a verification block to the report.
+    armsoft_supabase_url: Optional[str] = field(
+        default_factory=lambda: _get("ARMSOFT_SUPABASE_URL")
+    )
+    armsoft_supabase_key: Optional[str] = field(
+        default_factory=lambda: _get("ARMSOFT_SUPABASE_KEY")
+    )
+
     # --- Timeless (meeting source) ---
     timeless_api_token: Optional[str] = field(
         default_factory=lambda: _get("TIMELESS_API_TOKEN")
@@ -266,6 +276,10 @@ class Config:
     @property
     def has_supabase(self) -> bool:
         return bool(self.supabase_url and self.supabase_service_role_key)
+
+    @property
+    def has_armsoft(self) -> bool:
+        return bool(self.armsoft_supabase_url and self.armsoft_supabase_key)
 
     @property
     def has_timeless(self) -> bool:

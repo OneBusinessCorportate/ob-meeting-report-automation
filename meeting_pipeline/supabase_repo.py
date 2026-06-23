@@ -27,7 +27,7 @@ TIMELESS_SOURCE_DEFAULTS = {
 
 
 class SupabaseRepo:
-    def __init__(self, config: Config, client: Any = None):
+    def __init__(self, config: Config, client: Any = None, armsoft_client: Any = None):
         self.config = config
         if client is not None:
             self.client = client
@@ -38,6 +38,15 @@ class SupabaseRepo:
             self.client = create_client(
                 config.supabase_url, config.supabase_service_role_key
             )
+
+        if armsoft_client is not None:
+            self.armsoft_client: Any = armsoft_client
+        elif config.has_armsoft:
+            from supabase import create_client as _cc  # imported lazily
+
+            self.armsoft_client = _cc(config.armsoft_supabase_url, config.armsoft_supabase_key)
+        else:
+            self.armsoft_client = None
 
     # --- Sources --------------------------------------------------------------
     def ensure_source(
@@ -109,8 +118,119 @@ class SupabaseRepo:
             email = (row.get("email") or "").strip()
             if email:
                 entry["email"] = email
+            mqa_name = ((meta or {}).get("mqa_name") or "").strip()
+            if mqa_name:
+                entry["mqa_name"] = mqa_name
             roster.append(entry)
         return roster
+
+    # --- Armsoft cross-check ---------------------------------------------------
+    def get_armsoft_portfolio_activity(self, before_date: str) -> List[Dict[str, Any]]:
+        """Per-accountant Armsoft document activity for the day before before_date.
+
+        Uses mqa_chats (this project) for company→accountant assignments, then
+        checks armsoft_db.parsed_documents_journal (Armsoft project) for actual
+        activity. Returns [] when armsoft_client is not configured, or on error.
+        Only returns entries for accountants who have an mqa_name in their roster entry.
+        """
+        if self.armsoft_client is None:
+            return []
+
+        from datetime import date as _date, timedelta as _td
+
+        try:
+            target = _date.fromisoformat(before_date) - _td(days=1)
+        except Exception:
+            target = _date.today() - _td(days=1)
+
+        day_start = f"{target.isoformat()}T00:00:00+00:00"
+        day_end = f"{(target + _td(days=1)).isoformat()}T00:00:00+00:00"
+
+        try:
+            chats = (
+                self.client.table("mqa_chats")
+                .select("accountant, hvhh")
+                .not_is("hvhh", "null")
+                .execute()
+            ).data or []
+        except Exception as exc:
+            log.warning("Could not load mqa_chats for Armsoft cross-check: %s", exc)
+            return []
+
+        by_accountant: Dict[str, List[str]] = {}
+        for chat in chats:
+            acc = (chat.get("accountant") or "").strip()
+            hvhh = (chat.get("hvhh") or "").strip()
+            if acc and hvhh:
+                by_accountant.setdefault(acc, []).append(hvhh)
+
+        try:
+            roster = self.get_team_roster()
+        except Exception as exc:
+            log.warning("Could not load roster for Armsoft cross-check: %s", exc)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for person in roster:
+            mqa_name = person.get("mqa_name", "").strip()
+            if not mqa_name:
+                continue
+            hvhhs = by_accountant.get(mqa_name, [])
+            assigned = len(hvhhs)
+            if not hvhhs:
+                results.append({
+                    "name": person["name"], "mqa_name": mqa_name,
+                    "assigned": 0, "active": 0, "docs": 0, "date": str(target),
+                })
+                continue
+
+            try:
+                companies = (
+                    self.armsoft_client.schema("armsoft_db")
+                    .table("armsoft_companies")
+                    .select("company_id")
+                    .in_("name", hvhhs)
+                    .execute()
+                ).data or []
+                company_ids = [c["company_id"] for c in companies]
+            except Exception as exc:
+                log.warning("Armsoft companies lookup failed for %s: %s", mqa_name, exc)
+                company_ids = []
+
+            if not company_ids:
+                results.append({
+                    "name": person["name"], "mqa_name": mqa_name,
+                    "assigned": assigned, "active": 0, "docs": 0, "date": str(target),
+                })
+                continue
+
+            try:
+                docs = (
+                    self.armsoft_client.schema("armsoft_db")
+                    .table("parsed_documents_journal")
+                    .select("company_id")
+                    .in_("company_id", company_ids)
+                    .gte("doc_date", day_start)
+                    .lt("doc_date", day_end)
+                    .execute()
+                ).data or []
+                active_cos = len({row["company_id"] for row in docs})
+                doc_count = len(docs)
+            except Exception as exc:
+                log.warning("Armsoft activity lookup failed for %s: %s", mqa_name, exc)
+                active_cos = 0
+                doc_count = 0
+
+            results.append({
+                "name": person["name"],
+                "mqa_name": mqa_name,
+                "assigned": assigned,
+                "active": active_cos,
+                "docs": doc_count,
+                "date": str(target),
+            })
+
+        return results
 
     # --- Meetings (L1) --------------------------------------------------------
     def upsert_meeting(
