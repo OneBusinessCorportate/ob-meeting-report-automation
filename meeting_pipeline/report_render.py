@@ -354,16 +354,20 @@ def render_telegram_report(
         lines.append(meeting_date)
     lines.append("")
 
+    armsoft_lookup: Dict[str, Any] = {
+        _canonical_first(e.get("name", "")): e
+        for e in (armsoft_activity or [])
+        if _canonical_first(e.get("name", ""))
+    }
+
     lines += _score_block(data)
     lines += _attendance_block(data)
-    lines += _accountant_blocks(data, team_roster, manager)
+    lines += _accountant_blocks(data, team_roster, manager, armsoft_lookup or None)
     lines += _manager_block(data, manager, roster_firsts)
     lines += _general_attention_block(data, roster_firsts)
     lines += _critical_errors_block(data)
     lines += _general_tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
-    if armsoft_activity:
-        lines += _armsoft_block(armsoft_activity)
     if include_analytics:
         block = _analytics_block(data, prior_stats, roster_firsts, manager)
         if block:
@@ -433,10 +437,35 @@ def _attendance_block(data: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _armsoft_line(canonical: str, armsoft_lookup: Dict[str, Any]) -> List[str]:
+    """One-line Armsoft fact for a single person, shown inside their block."""
+    arm = armsoft_lookup.get(canonical)
+    if arm is None:
+        return []
+    assigned = arm.get("assigned", 0)
+    active = arm.get("active", 0)
+    docs = arm.get("docs", 0)
+    invoices = arm.get("invoices", 0)
+    tax_docs = arm.get("tax_docs", 0)
+    date_label = _dd_mm(arm.get("date", ""))
+    label = f"Armsoft ({date_label})"
+    if assigned == 0:
+        return [f"{label}: нет назначенных клиентов"]
+    if active == 0:
+        return [f"{label}: ⚠️ нет активности ({assigned} клиентов)"]
+    parts = [f"{active}/{assigned} клиентов", f"{docs} докум."]
+    if invoices:
+        parts.append(f"{invoices} накл.")
+    if tax_docs:
+        parts.append(f"{tax_docs} нал. докум.")
+    return [f"{label}: ✅ {', '.join(parts)}"]
+
+
 def _accountant_blocks(
     data: Dict[str, Any],
     team_roster: Optional[List[Dict[str, Any]]],
     manager: str,
+    armsoft_lookup: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     roster_firsts = _roster_firsts(team_roster)
     entries = [
@@ -487,6 +516,8 @@ def _accountant_blocks(
         out += ["  " + l for l in _optional_field_lines("Помощь", entry.get("needs_help"))]
         out += ["  " + l for l in _optional_field_lines("Вопрос", entry.get("question_to_manager"))]
         out += ["  " + l for l in _optional_field_lines("Не выполнено", entry.get("task_not_done_reason"))]
+        if armsoft_lookup:
+            out += ["  " + l for l in _armsoft_line(_canonical_first(entry.get("name")), armsoft_lookup)]
         out += ["  " + l for l in _person_tasks(_canonical_first(entry.get("name")), data, roster_firsts)]
         out += ["  " + l for l in _person_attention(_canonical_first(entry.get("name")), data)]
         out.append("")
