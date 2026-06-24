@@ -343,6 +343,7 @@ def render_telegram_report(
     team_roster: Optional[List[Dict[str, Any]]] = None,
     prior_stats: Optional[List[Dict[str, Any]]] = None,
     armsoft_activity: Optional[List[Dict[str, Any]]] = None,
+    taxservice_activity: Optional[List[Dict[str, Any]]] = None,
     include_analytics: bool = True,
 ) -> str:
     manager = _find_manager(team_roster)
@@ -359,10 +360,19 @@ def render_telegram_report(
         for e in (armsoft_activity or [])
         if _canonical_first(e.get("name", ""))
     }
+    taxservice_lookup: Dict[str, Any] = {
+        _canonical_first(e.get("name", "")): e
+        for e in (taxservice_activity or [])
+        if _canonical_first(e.get("name", ""))
+    }
 
     lines += _score_block(data)
     lines += _attendance_block(data)
-    lines += _accountant_blocks(data, team_roster, manager, armsoft_lookup or None)
+    lines += _accountant_blocks(
+        data, team_roster, manager,
+        armsoft_lookup or None,
+        taxservice_lookup or None,
+    )
     lines += _manager_block(data, manager, roster_firsts)
     lines += _general_attention_block(data, roster_firsts)
     lines += _critical_errors_block(data)
@@ -461,11 +471,30 @@ def _armsoft_line(canonical: str, armsoft_lookup: Dict[str, Any]) -> List[str]:
     return [f"{label}: ✅ {', '.join(parts)}"]
 
 
+def _taxservice_line(canonical: str, taxservice_lookup: Dict[str, Any]) -> List[str]:
+    """One-line tax portal fact for a single person, shown inside their block."""
+    ts = taxservice_lookup.get(canonical)
+    if ts is None:
+        return []
+    assigned = ts.get("assigned", 0)
+    active = ts.get("active", 0)
+    invoices = ts.get("invoices", 0)
+    date_label = _dd_mm(ts.get("date", ""))
+    label = f"Налоговая ({date_label})"
+    if assigned == 0:
+        return [f"{label}: нет назначенных клиентов"]
+    if active == 0:
+        return [f"{label}: – нет активности"]
+    parts = [f"{invoices} счёт-фактур", f"{active}/{assigned} компаний"]
+    return [f"{label}: ✅ {', '.join(parts)}"]
+
+
 def _accountant_blocks(
     data: Dict[str, Any],
     team_roster: Optional[List[Dict[str, Any]]],
     manager: str,
     armsoft_lookup: Optional[Dict[str, Any]] = None,
+    taxservice_lookup: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     roster_firsts = _roster_firsts(team_roster)
     entries = [
@@ -518,6 +547,8 @@ def _accountant_blocks(
         out += ["  " + l for l in _optional_field_lines("Не выполнено", entry.get("task_not_done_reason"))]
         if armsoft_lookup:
             out += ["  " + l for l in _armsoft_line(_canonical_first(entry.get("name")), armsoft_lookup)]
+        if taxservice_lookup:
+            out += ["  " + l for l in _taxservice_line(_canonical_first(entry.get("name")), taxservice_lookup)]
         out += ["  " + l for l in _person_tasks(_canonical_first(entry.get("name")), data, roster_firsts)]
         out += ["  " + l for l in _person_attention(_canonical_first(entry.get("name")), data)]
         out.append("")

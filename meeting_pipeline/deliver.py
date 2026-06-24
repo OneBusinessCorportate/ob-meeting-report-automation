@@ -99,6 +99,15 @@ def _render_with_current_template(
         except Exception as exc:  # cross-check is best-effort
             log.warning("Could not load Armsoft portfolio activity: %s", exc)
             armsoft_activity = []
+        try:
+            taxservice_activity = (
+                repo.get_taxservice_activity(meeting_date)
+                if meeting_date
+                else []
+            )
+        except Exception as exc:  # cross-check is best-effort
+            log.warning("Could not load taxservice activity: %s", exc)
+            taxservice_activity = []
         report_md = render_telegram_report(
             data,
             meeting_date=meeting_date,
@@ -106,6 +115,7 @@ def _render_with_current_template(
             team_roster=team_roster,
             prior_stats=prior_stats,
             armsoft_activity=armsoft_activity,
+            taxservice_activity=taxservice_activity,
             include_analytics=False,
         )
         analytics_md = render_analytics_message(

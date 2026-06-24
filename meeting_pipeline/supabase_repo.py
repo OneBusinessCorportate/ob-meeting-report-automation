@@ -266,6 +266,148 @@ class SupabaseRepo:
 
         return results
 
+    # --- Taxservice cross-check -----------------------------------------------
+    def get_taxservice_activity(self, before_date: str) -> List[Dict[str, Any]]:
+        """Per-accountant tax portal invoice activity from armsoft_db.tax_invoices_issued.
+
+        Uses the same company→accountant mapping as get_armsoft_portfolio_activity.
+        Finds the most recent date with data (≤ yesterday, within 30 days) and
+        returns per-accountant invoice counts for that date.
+        Returns [] when armsoft_client is not configured or on error.
+        """
+        if self.armsoft_client is None:
+            return []
+
+        from datetime import date as _date, timedelta as _td
+
+        try:
+            target = _date.fromisoformat(before_date) - _td(days=1)
+        except Exception:
+            target = _date.today() - _td(days=1)
+
+        lookback_start = target - _td(days=30)
+        target_end = f"{target.isoformat()}T23:59:59+00:00"
+        lookback_start_str = f"{lookback_start.isoformat()}T00:00:00+00:00"
+
+        try:
+            chats = (
+                self.client.table("mqa_chats")
+                .select("accountant, hvhh")
+                .not_is("hvhh", "null")
+                .execute()
+            ).data or []
+        except Exception as exc:
+            log.warning("Could not load mqa_chats for taxservice cross-check: %s", exc)
+            return []
+
+        by_accountant: Dict[str, List[str]] = {}
+        for chat in chats:
+            acc = (chat.get("accountant") or "").strip()
+            hvhh = (chat.get("hvhh") or "").strip()
+            if acc and hvhh:
+                by_accountant.setdefault(acc, []).append(hvhh)
+
+        try:
+            roster = self.get_team_roster()
+        except Exception as exc:
+            log.warning("Could not load roster for taxservice cross-check: %s", exc)
+            return []
+
+        # Collect all HVHHs across every accountant so we can do one company lookup.
+        all_hvhhs: List[str] = list({
+            h
+            for person in roster
+            for h in by_accountant.get(person.get("mqa_name", "").strip(), [])
+            if person.get("mqa_name", "").strip()
+        })
+
+        if not all_hvhhs:
+            return []
+
+        try:
+            all_companies = (
+                self.armsoft_client.schema("armsoft_db")
+                .table("armsoft_companies")
+                .select("company_id, name")
+                .in_("name", all_hvhhs)
+                .execute()
+            ).data or []
+            hvhh_to_company_id: Dict[str, int] = {
+                c["name"]: c["company_id"] for c in all_companies
+            }
+            all_company_ids = list(hvhh_to_company_id.values())
+        except Exception as exc:
+            log.warning("Could not load company IDs for taxservice: %s", exc)
+            return []
+
+        if not all_company_ids:
+            return []
+
+        # Find the most recent date with invoice data for these companies.
+        try:
+            recent = (
+                self.armsoft_client.schema("armsoft_db")
+                .table("tax_invoices_issued")
+                .select("issued_at")
+                .in_("company_id", all_company_ids)
+                .gte("issued_at", lookback_start_str)
+                .lte("issued_at", target_end)
+                .order("issued_at", desc=True)
+                .limit(1)
+                .execute()
+            ).data or []
+            if not recent:
+                return []
+            data_date = _date.fromisoformat(recent[0]["issued_at"][:10])
+        except Exception as exc:
+            log.warning("Could not find most recent taxservice date: %s", exc)
+            return []
+
+        day_start = f"{data_date.isoformat()}T00:00:00+00:00"
+        day_end = f"{(data_date + _td(days=1)).isoformat()}T00:00:00+00:00"
+
+        try:
+            inv_rows = (
+                self.armsoft_client.schema("armsoft_db")
+                .table("tax_invoices_issued")
+                .select("company_id")
+                .in_("company_id", all_company_ids)
+                .gte("issued_at", day_start)
+                .lt("issued_at", day_end)
+                .execute()
+            ).data or []
+            invoices_by_company: Dict[int, int] = {}
+            for row in inv_rows:
+                cid = row["company_id"]
+                invoices_by_company[cid] = invoices_by_company.get(cid, 0) + 1
+        except Exception as exc:
+            log.warning("Could not load taxservice invoice data: %s", exc)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for person in roster:
+            mqa_name = person.get("mqa_name", "").strip()
+            if not mqa_name:
+                continue
+            hvhhs = by_accountant.get(mqa_name, [])
+            assigned = len(hvhhs)
+            if not hvhhs:
+                results.append({
+                    "name": person["name"], "mqa_name": mqa_name,
+                    "assigned": 0, "active": 0, "invoices": 0, "date": str(data_date),
+                })
+                continue
+            company_ids = [hvhh_to_company_id[h] for h in hvhhs if h in hvhh_to_company_id]
+            active = sum(1 for cid in company_ids if invoices_by_company.get(cid, 0) > 0)
+            invoices = sum(invoices_by_company.get(cid, 0) for cid in company_ids)
+            results.append({
+                "name": person["name"], "mqa_name": mqa_name,
+                "assigned": assigned, "active": active,
+                "invoices": invoices, "date": str(data_date),
+            })
+
+        return results
+
     # --- Meetings (L1) --------------------------------------------------------
     def upsert_meeting(
         self,
