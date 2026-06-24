@@ -17,7 +17,6 @@ from typing import Any, Dict, Optional
 from .config import Config
 from .report_render import (
     meeting_time_range,
-    render_analytics_message,
     render_telegram_report,
 )
 from .supabase_repo import SupabaseRepo
@@ -54,22 +53,20 @@ _RENDER_COLUMNS = (
 
 def _render_with_current_template(
     config: Config, repo: SupabaseRepo, report: Dict[str, Any]
-) -> tuple[Optional[str], Optional[str]]:
+) -> Optional[str]:
     """Re-render a stored analysis with the current rigid template.
 
-    Returns ``(report_md, analytics_md)``: the main report message and the
-    standalone analytics message (sent right after). ``analytics_md`` is None
-    when there is no analytics to show. Returns ``(None, None)`` when the
-    analysis predates the structured extras or rendering fails, so the caller
-    falls back to the stored ``telegram_report_md`` — delivery must never break
-    because of a template problem.
+    Returns the rendered report string (analytics included inline), or None
+    when the analysis predates the structured extras or rendering fails — the
+    caller then falls back to the stored ``telegram_report_md``.  Delivery must
+    never break because of a template problem.
     """
     try:
         extras = (report.get("ai_metadata") or {}).get("report_extras") or {}
         # Without the structured extras there is nothing to fill the template
         # with (only legacy free-form text) — keep the stored message.
         if not (extras.get("effectiveness") or extras.get("participant_breakdown")):
-            return None, None
+            return None
 
         data = {k: report.get(k) for k in _RENDER_COLUMNS if report.get(k) is not None}
         data.update(extras)
@@ -99,25 +96,18 @@ def _render_with_current_template(
         except Exception as exc:  # cross-check is best-effort
             log.warning("Could not load Armsoft portfolio activity: %s", exc)
             armsoft_activity = []
-        report_md = render_telegram_report(
+        return render_telegram_report(
             data,
             meeting_date=meeting_date,
             time_range=meeting_time_range(meeting, config.timezone_offset_hours),
             team_roster=team_roster,
             prior_stats=prior_stats,
             armsoft_activity=armsoft_activity,
-            include_analytics=False,
+            include_analytics=True,
         )
-        analytics_md = render_analytics_message(
-            data,
-            meeting_date=meeting_date,
-            team_roster=team_roster,
-            prior_stats=prior_stats,
-        )
-        return report_md, (analytics_md or None)
     except Exception as exc:
         log.exception("Re-rendering stored report failed; using stored text: %s", exc)
-        return None, None
+        return None
 
 
 def deliver_today(
@@ -198,31 +188,15 @@ def deliver_today(
     if already_sent:
         log.info("Re-sending already-delivered report %s (--force).", report["id"])
 
-    md, analytics_md = _render_with_current_template(config, repo, report)
+    md = _render_with_current_template(config, repo, report)
     if md:
         log.info("Report %s re-rendered with the current template.", report["id"])
     else:
         md = report["telegram_report_md"]
-        analytics_md = None
     result = telegram.send_message(md, parse_mode="Markdown")
     if not result.ok:
         # Free the slot so the next run can retry the delivery.
         repo.release_daily_send(on_date, report_send_kind)
-
-    # Analytics goes out as a SEPARATE message right after the report, only if
-    # the report itself was delivered. It is best-effort: a failure here is
-    # logged but does not fail the whole delivery (the report already landed).
-    analytics_result = None
-    if result.ok and analytics_md:
-        analytics_result = telegram.send_message(analytics_md, parse_mode="Markdown")
-        if analytics_result.ok:
-            log.info("Sent analytics follow-up for report %s.", report["id"])
-        else:
-            log.error(
-                "Analytics follow-up failed for report %s: %s",
-                report["id"],
-                analytics_result.error,
-            )
 
     detail = (
         f"delivered {result.parts_sent} part(s)" if result.ok else result.error
@@ -249,6 +223,5 @@ def deliver_today(
         "delivered": result.ok,
         "status": "delivered" if result.ok else "delivery_failed",
         "analysis_id": report["id"],
-        "analytics_sent": bool(analytics_result and analytics_result.ok),
         "telegram": result,
     }

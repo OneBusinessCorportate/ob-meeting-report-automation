@@ -28,6 +28,14 @@ from typing import Any, Dict, List, Optional, Tuple
 MISSING = "❌"  # value was not voiced on the meeting
 NONE_DASH = "–"  # the person explicitly said there is nothing
 
+# Known name aliases: maps any variant the AI might output to the canonical
+# first name used in the roster.  Both directions are registered so lookup is
+# always O(1) regardless of which form the AI writes.
+_NAME_ALIASES: Dict[str, str] = {
+    "асмик": "асмик",
+    "хасмик": "асмик",  # roster uses Асмик; old transcripts may say Хасмик
+}
+
 # Canonical checklist labels (order matches the prompt schema).
 CRITERIA_LABELS = [
     "Все высказались",
@@ -71,9 +79,15 @@ def _person(name: Any, roster_firsts: set) -> str:
     return cleaned
 
 
+def _canonical_first(name: Any) -> str:
+    """Return the canonical (alias-resolved) lower-case first name."""
+    raw = _first_name(name).lower()
+    return _NAME_ALIASES.get(raw, raw)
+
+
 def _roster_firsts(team_roster: Optional[List[Dict[str, Any]]]) -> set:
     return {
-        _first_name(r.get("name")).lower() for r in team_roster or [] if _first_name(r.get("name"))
+        _canonical_first(r.get("name")) for r in team_roster or [] if _first_name(r.get("name"))
     }
 
 
@@ -224,12 +238,12 @@ def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
 # Per-person task and attention helpers
 # ---------------------------------------------------------------------------
 
-def _person_tasks(name_lower: str, data: Dict[str, Any], roster_firsts: set) -> List[str]:
+def _person_tasks(name_canonical: str, data: Dict[str, Any], roster_firsts: set) -> List[str]:
     """Action items assigned to this specific person, shown inside their block."""
     items = [
         t for t in data.get("action_items") or []
         if _clean(t.get("text")) and
-        _first_name(_clean(t.get("assignee", ""))).lower() == name_lower
+        _canonical_first(_clean(t.get("assignee", ""))) == name_canonical
     ]
     if not items:
         return []
@@ -241,13 +255,13 @@ def _person_tasks(name_lower: str, data: Dict[str, Any], roster_firsts: set) -> 
     return out
 
 
-def _person_attention(name_lower: str, data: Dict[str, Any]) -> List[str]:
+def _person_attention(name_canonical: str, data: Dict[str, Any]) -> List[str]:
     """Risks where this person is the owner, shown inside their block."""
     severity_rank = {"high": 0, "medium": 1, "low": 2}
     risks = [
         r for r in data.get("problems_risks") or []
         if _clean(r.get("text")) and
-        _first_name(_clean(r.get("owner", ""))).lower() == name_lower
+        _canonical_first(_clean(r.get("owner", ""))) == name_canonical
     ]
     if not risks:
         return []
@@ -267,7 +281,7 @@ def _general_attention_block(data: Dict[str, Any], roster_firsts: set) -> List[s
     risks = [
         r for r in data.get("problems_risks") or []
         if _clean(r.get("text")) and
-        _first_name(_clean(r.get("owner", ""))).lower() not in roster_firsts
+        _canonical_first(_clean(r.get("owner", ""))) not in roster_firsts
     ]
     if not risks:
         return []
@@ -287,7 +301,7 @@ def _general_tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
     items = [
         t for t in data.get("action_items") or []
         if _clean(t.get("text")) and
-        _first_name(_clean(t.get("assignee", ""))).lower() not in roster_firsts
+        _canonical_first(_clean(t.get("assignee", ""))) not in roster_firsts
     ]
     if not items:
         return []
@@ -427,22 +441,31 @@ def _accountant_blocks(
     roster_firsts = _roster_firsts(team_roster)
     entries = [
         e for e in data.get("participant_breakdown") or []
-        if _first_name(e.get("name")) and _first_name(e.get("name")).lower() != manager.lower()
+        if _first_name(e.get("name")) and _canonical_first(e.get("name")) != manager.lower()
     ]
     if roster_firsts:
         entries = [
-            e for e in entries if _first_name(e.get("name")).lower() in roster_firsts
+            e for e in entries if _canonical_first(e.get("name")) in roster_firsts
         ]
+
+    # Add absent entries for roster members the AI omitted entirely from the
+    # breakdown — they must still appear in the report so attendance is complete.
+    breakdown_canonical = {_canonical_first(e.get("name")) for e in entries}
+    for roster_member in (team_roster or []):
+        canonical = _canonical_first(roster_member.get("name"))
+        if canonical and canonical != manager.lower() and canonical not in breakdown_canonical:
+            entries.append({"name": _first_name(roster_member.get("name")), "participated": False})
+
     if not entries:
         return []
 
     roster_order = {
-        _first_name(r.get("name")).lower(): i for i, r in enumerate(team_roster or [])
+        _canonical_first(r.get("name")): i for i, r in enumerate(team_roster or [])
     }
     entries.sort(
         key=lambda e: (
             bool(e.get("participated")),
-            roster_order.get(_first_name(e.get("name")).lower(), len(roster_order)),
+            roster_order.get(_canonical_first(e.get("name")), len(roster_order)),
         )
     )
 
@@ -464,8 +487,8 @@ def _accountant_blocks(
         out += ["  " + l for l in _optional_field_lines("Помощь", entry.get("needs_help"))]
         out += ["  " + l for l in _optional_field_lines("Вопрос", entry.get("question_to_manager"))]
         out += ["  " + l for l in _optional_field_lines("Не выполнено", entry.get("task_not_done_reason"))]
-        out += ["  " + l for l in _person_tasks(name.lower(), data, roster_firsts)]
-        out += ["  " + l for l in _person_attention(name.lower(), data)]
+        out += ["  " + l for l in _person_tasks(_canonical_first(entry.get("name")), data, roster_firsts)]
+        out += ["  " + l for l in _person_attention(_canonical_first(entry.get("name")), data)]
         out.append("")
     if out and out[-1] != "":
         out.append("")
@@ -475,7 +498,7 @@ def _accountant_blocks(
 def _manager_block(data: Dict[str, Any], manager: str, roster_firsts: set) -> List[str]:
     reactions = data.get("manager_reactions") or []
     absent_firsts = {
-        _first_name(e.get("name")).lower()
+        _canonical_first(e.get("name"))
         for e in (data.get("participant_breakdown") or [])
         if not e.get("participated") and _first_name(e.get("name"))
     }
@@ -562,9 +585,9 @@ def _roster_breakdown(
     out = []
     for entry in data.get("participant_breakdown") or []:
         first = _first_name(entry.get("name"))
-        if not first or first.lower() == manager.lower():
+        if not first or _canonical_first(entry.get("name")) == manager.lower():
             continue
-        if roster_firsts and first.lower() not in roster_firsts:
+        if roster_firsts and _canonical_first(entry.get("name")) not in roster_firsts:
             continue
         out.append(entry)
     return out
