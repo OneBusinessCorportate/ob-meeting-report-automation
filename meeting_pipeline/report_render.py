@@ -165,8 +165,8 @@ def _find_manager(team_roster: Optional[List[Dict[str, Any]]]) -> str:
 def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
     if not activity:
         return []
-    date_label = activity[0].get("date", "")
-    lines: List[str] = [f"\U0001f4ca Активность в Armsoft ({date_label})", ""]
+    date_label = _dd_mm(activity[0].get("date", ""))
+    lines: List[str] = [f"\U0001f4ca ФАКТ ПО ARMSOFT ({date_label})", ""]
     for entry in activity:
         name = entry.get("name") or "?"
         assigned = entry.get("assigned", 0)
@@ -175,16 +175,16 @@ def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
         invoices = entry.get("invoices", 0)
         tax_docs = entry.get("tax_docs", 0)
         if assigned == 0:
-            lines.append(f"• {name} — нет назначенных клиентов")
+            lines.append(f"  – {name}: нет назначенных клиентов")
         elif active == 0:
-            lines.append(f"• {name} — {assigned} кл. | вчера: ⚠️ нет активности")
+            lines.append(f"  ⚠️ {name} — {assigned} кл. | нет активности")
         else:
             parts = [f"{active} компан.", f"{docs} докум."]
             if invoices:
                 parts.append(f"{invoices} накл.")
             if tax_docs:
                 parts.append(f"{tax_docs} нал. докум.")
-            lines.append(f"• {name} — {assigned} кл. | вчера: {', '.join(parts)}")
+            lines.append(f"  ✅ {name} — {assigned} кл. | {', '.join(parts)}")
     lines.append("")
     return lines
 
