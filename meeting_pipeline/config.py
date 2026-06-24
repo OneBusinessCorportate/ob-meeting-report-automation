@@ -157,7 +157,15 @@ class Config:
     # Format: comma-separated "Имя:роль" (role optional), e.g.
     #   MEETING_TEAM_ROSTER="Эмилия:руководитель,Анна:бухгалтер,Давид:бухгалтер"
     meeting_team_roster_raw: Optional[str] = field(
-        default_factory=lambda: _get("MEETING_TEAM_ROSTER")
+        default_factory=lambda: _get(
+            "MEETING_TEAM_ROSTER",
+            "Оля Акобян:бухгалтер,Стелла Паататанян:бухгалтер,"
+            "Наира Залинян:бухгалтер,Тагуи Гахраманян:бухгалтер,"
+            "Аваг Айрапетян:бухгалтер,Наира Мхитарян:бухгалтер,"
+            "Хасмик Бадалян:бухгалтер,Лилит Хосровьян:бухгалтер,"
+            "Давид Алоян:бухгалтер,Роберт Тарланян:бухгалтер,"
+            "Лилит Кябабчян:бухгалтер,Артур Барсегян:бухгалтер",
+        )
     )
     # Extra ASR fixes applied to transcripts before analysis, on top of the
     # built-in ones (see analyze.TRANSCRIPT_CORRECTIONS). Format:

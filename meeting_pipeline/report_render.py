@@ -16,7 +16,7 @@ The layout is the approved report with the requested fixes applied
 - no «Кто был» / «Не было» lines — attendance is visible from the per-person
   blocks, where non-participants come FIRST as one-liners
   («👤 Имя - не принимал(а) участия.»);
-- mandatory «Отчёт за вчера / План на сегодня / Блокеры» per accountant:
+- mandatory «Отчёт за вчера / План на сегодня / Завтра / Блокеры» per accountant:
   ❌ when not voiced, «–» when the person explicitly said there is nothing;
 - manager remarks grouped («Общее» first): the name on its own line, every
   remark on its own numbered line below, no «поручила»;
@@ -61,6 +61,10 @@ CRITERIA_LABELS = [
     "Делилась новостями",
     "Хвалила команду",
     "Разбирала прошлые задачи",
+    "Формат 1 мин. соблюдён",
+    "Невыполненные объяснены",
+    "Ошибки Маргариты обсудили",
+    "Планы на завтра озвучены",
 ]
 
 _STATUS_ICONS = {"выполнено": "✅", "частично": "🟡", "не выполнено": "❌"}
@@ -299,6 +303,7 @@ def render_telegram_report(
     lines += _accountant_blocks(data, team_roster, manager)
     lines += _manager_block(data, manager, roster_firsts)
     lines += _risks_block(data)
+    lines += _critical_errors_block(data)
     lines += _tasks_block(data, roster_firsts)
     lines += _open_questions_block(data)
     if armsoft_activity:
@@ -351,7 +356,7 @@ def _score_block(data: Dict[str, Any]) -> List[str]:
         max_score = eff.get("max_score") or 10
         out.append(f"Оценка: {int(score)}/{int(max_score)}")
     if criteria:
-        # Older stored analyses have 5 checklist items (no followup criterion);
+        # Older stored analyses have fewer checklist items;
         # render only what was actually assessed instead of inventing a ❌.
         for i, label in enumerate(CRITERIA_LABELS[: len(criteria)]):
             status = _clean((criteria[i] or {}).get("status"))
@@ -426,9 +431,11 @@ def _accountant_blocks(
         out.append(f"👤 {name}")
         out += ["  " + l for l in _field_lines("Вчера", entry.get("yesterday"))]
         out += ["  " + l for l in _field_lines("Сегодня", entry.get("today_plan"))]
+        out += ["  " + l for l in _field_lines("Завтра", entry.get("tomorrow_plan"))]
         out += ["  " + l for l in _field_lines("Блокеры", entry.get("blockers"))]
         out += ["  " + l for l in _optional_field_lines("Помощь", entry.get("needs_help"))]
         out += ["  " + l for l in _optional_field_lines("Вопрос", entry.get("question_to_manager"))]
+        out += ["  " + l for l in _optional_field_lines("Не выполнено", entry.get("task_not_done_reason"))]
         out.append("")
     if out and out[-1] != "":
         out.append("")
@@ -487,6 +494,29 @@ def _risks_block(data: Dict[str, Any]) -> List[str]:
         icon = _SEVERITY_ICONS.get(severity, "🟡")
         out.append(f"  {icon} {i}. {_clean(risk.get('text'))}")
         out.append(f"  Решение: {_value_or_cross(risk.get('decision'))}")
+        out.append("")
+    return out
+
+
+def _critical_errors_block(data: Dict[str, Any]) -> List[str]:
+    errors = [e for e in data.get("critical_errors_margarita") or [] if _clean(e.get("error"))]
+    if not errors:
+        return []
+    out = ["📋 ОШИБКИ ПО ОТЧЁТУ МАРГАРИТЫ", ""]
+    for i, err in enumerate(errors, start=1):
+        accountant = _clean(err.get("accountant")) or "Не указано"
+        discussed = err.get("was_discussed", False)
+        explanation = _clean(err.get("explanation_given"))
+        root_cause = _clean(err.get("root_cause"))
+        out.append(f"  {i}. {_clean(err.get('error'))}")
+        out.append(f"  Сотрудник: {accountant}")
+        out.append(f"  Обсуждалось: {'да' if discussed else 'нет'}")
+        if explanation:
+            out.append(f"  Объяснение: {explanation}")
+        else:
+            out.append(f"  Объяснение: {MISSING}")
+        if root_cause and root_cause.lower() not in _MISSING_WORDS:
+            out.append(f"  Причина: {root_cause}")
         out.append("")
     return out
 
@@ -716,12 +746,19 @@ def _accountant_tasks_lines(
         for e in participated
         if _real_count(e.get("today_plan")) == 0
     ]
+    no_tomorrow = [
+        _person(e.get("name"), roster_firsts)
+        for e in participated
+        if _real_count(e.get("tomorrow_plan")) == 0
+    ]
     silent = [_person(e.get("name"), roster_firsts) for e in breakdown if not e.get("participated")]
 
     body: List[str] = []
     body.append(f"Озвучили план: {len(participated) - len(no_plan)} из {len(participated)}")
     if no_plan:
         body.append(f"Без плана: {', '.join(no_plan)}")
+    if no_tomorrow:
+        body.append(f"Без плана на завтра: {', '.join(no_tomorrow)}")
 
     actions = [t for t in data.get("action_items") or [] if _clean(t.get("text"))]
     if actions:
@@ -782,6 +819,23 @@ def _improve_lines(
     ]
     if no_plan:
         tips.append(f"Попросить озвучивать план на день: {', '.join(no_plan)}")
+
+    # Accountants who violated the 1-minute format.
+    format_violators = [
+        _person(e.get("name"), roster_firsts)
+        for e in breakdown
+        if e.get("participated") and _clean(e.get("format_compliance")).lower() == "нарушен"
+    ]
+    if format_violators:
+        tips.append(f"Соблюдать формат 1 минуты: {', '.join(format_violators)}")
+
+    # Accountants who didn't explain why tasks weren't done.
+    no_reason = [
+        _person(e.get("name"), roster_firsts)
+        for e in breakdown
+        if e.get("participated") and not _has_text(e.get("task_not_done_reason"))
+        and _real_count(e.get("today_plan")) == 0
+    ]
 
     # People who keep staying silent.
     silent = [e for e in breakdown if not e.get("participated")]
