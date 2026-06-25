@@ -108,6 +108,7 @@ def deliver_today(
     date_str: Optional[str] = None,
     force: bool = False,
     force_notice: bool = False,
+    final_check: bool = False,
     repo: Optional[SupabaseRepo] = None,
     telegram: Optional[TelegramClient] = None,
 ) -> Dict[str, Any]:
@@ -116,7 +117,10 @@ def deliver_today(
     Automatic runs (the cron) send each report at most once; ``force=True``
     (CLI: ``--force``) re-sends deliberately from a manual trigger.
     ``force_notice=True`` (CLI: ``--force-notice``) re-sends the "not found"
-    notice even if one was already sent today — useful for testing the format.
+    notice even if one was already sent today — useful for testing.
+    ``final_check=True`` means this is the last scheduled attempt for the day:
+    if still no report, send the "no calls" notice. Earlier checks return
+    ``status="no_report_waiting"`` so the caller retries silently.
     """
     repo = repo or SupabaseRepo(config)
     telegram = telegram or TelegramClient(config)
@@ -125,6 +129,14 @@ def deliver_today(
     report = repo.get_today_current_report(on_date)
 
     if not report or not (report.get("telegram_report_md") or "").strip():
+        if not (final_check or force_notice):
+            log.info("No L2 report for %s yet — will retry.", on_date)
+            return {
+                "ok": False,
+                "delivered": False,
+                "status": "no_report_waiting",
+                "telegram": None,
+            }
         if force_notice:
             repo.release_daily_send(on_date, NOTICE_SEND_KIND)
         if not repo.claim_daily_send(on_date, NOTICE_SEND_KIND):
@@ -143,7 +155,6 @@ def deliver_today(
         notice = f"{MISSING_REPORT_MESSAGE}\n\nДата: {on_date.isoformat()}"
         result = telegram.send_message(notice, parse_mode=None)
         if not result.ok:
-            # Free the slot so the next run can retry the notice.
             repo.release_daily_send(on_date, NOTICE_SEND_KIND)
         return {
             "ok": False,

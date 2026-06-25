@@ -38,11 +38,13 @@ from meeting_pipeline.utils import get_logger  # noqa: E402
 log = get_logger("scripts.daily")
 
 _RETRY_INTERVAL = 30 * 60   # 30 minutes between retries
-_MAX_RETRIES = 4             # covers 11:30 → 13:30 Armenia (4 × 30 min)
-_RETRY_STATUSES = {"report_not_found", "notice_already_sent", "delivery_failed"}
+_MAX_RETRIES = 3             # 3 retries → 4 total checks (e.g. 10:00/10:30/11:00/11:30 Armenia)
+# Only retry on transient "not yet available" or Telegram failure.
+# "report_not_found" (notice sent) and "notice_already_sent" are terminal — stop retrying.
+_RETRY_STATUSES = {"no_report_waiting", "delivery_failed"}
 
 
-def _run_pipeline(config, args: argparse.Namespace, summary: dict) -> None:
+def _run_pipeline(config, args: argparse.Namespace, summary: dict, *, final_check: bool = False) -> None:
     """Run one ingest→analyze→deliver pass, updating *summary* in-place."""
     if not args.skip_ingest:
         log.info("=== STEP 1: INGEST ===")
@@ -97,7 +99,7 @@ def _run_pipeline(config, args: argparse.Namespace, summary: dict) -> None:
     if not args.skip_deliver:
         log.info("=== STEP 3: DELIVER ===")
         try:
-            deliver_result = deliver_today(config, date_str=args.date)
+            deliver_result = deliver_today(config, date_str=args.date, final_check=final_check)
             summary["deliver"] = {
                 "status": deliver_result.get("status"),
                 "delivered": deliver_result.get("delivered"),
@@ -123,6 +125,15 @@ def main() -> int:
         action="store_true",
         help="Re-analyze even if a current completed L2 report already exists.",
     )
+    parser.add_argument(
+        "--final-check",
+        action="store_true",
+        help=(
+            "Treat this as the last attempt for the day: send the 'no calls' notice "
+            "immediately if no report is found instead of waiting silently. "
+            "Used by the afternoon retry cron."
+        ),
+    )
     parser.add_argument("--skip-ingest", action="store_true")
     parser.add_argument("--skip-analyze", action="store_true")
     parser.add_argument("--skip-deliver", action="store_true")
@@ -131,21 +142,26 @@ def main() -> int:
     config = load_config()
     summary: dict = {}
 
-    _run_pipeline(config, args, summary)
+    # First attempt. When --final-check is passed (afternoon cron) this is the
+    # only attempt and sends the notice immediately if no report exists.
+    _run_pipeline(config, args, summary, final_check=args.final_check)
 
-    # Retry every 30 minutes for transient failures — report not in DB yet, or
-    # Telegram rejected the send. Breaks immediately on success or permanent states.
-    # All pipeline steps are idempotent, so re-running is safe.
+    # Retry loop (only when NOT in --final-check mode).
+    # Checks 1–3 return "no_report_waiting" → sleep and retry.
+    # Check 4 (retry_num == _MAX_RETRIES) passes final_check=True → sends notice.
+    # All pipeline steps are idempotent so re-running on the same day is safe.
     for retry_num in range(1, _MAX_RETRIES + 1):
         deliver_status = summary.get("deliver", {}).get("status")
         if deliver_status not in _RETRY_STATUSES:
             break
+        is_final = not args.final_check and (retry_num == _MAX_RETRIES)
         log.info(
-            "Delivery pending (%s) — retry %d/%d in %d min (sleeping).",
+            "Delivery pending (%s) — retry %d/%d in %d min%s (sleeping).",
             deliver_status, retry_num, _MAX_RETRIES, _RETRY_INTERVAL // 60,
+            " [final]" if is_final else "",
         )
         time.sleep(_RETRY_INTERVAL)
-        _run_pipeline(config, args, summary)
+        _run_pipeline(config, args, summary, final_check=is_final)
 
     log.info("=== DAILY RUN SUMMARY ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))

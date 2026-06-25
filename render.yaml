@@ -1,20 +1,23 @@
 # Render Cron configuration for the OneBusiness daily meeting report.
 #
-# Schedule note: Render cron runs in UTC. Armenia is UTC+4 (no DST), so the
-# desired 11:30 Armenia delivery time == 07:30 UTC.
-#   "30 7 * * 1-5"  ->  07:30 UTC == 11:30 Armenia, Mon–Fri.
+# Schedule note: Render cron runs in UTC. Armenia is UTC+4 (no DST).
+#   06:00 UTC == 10:00 Armenia  (morning cron start — 4 checks every 30 min)
+#   07:30 UTC == 11:30 Armenia  (4th/final check sends notice if still nothing)
+#   12:00 UTC == 16:00 Armenia  (afternoon safety net for late-finishing calls)
 #
 # Set the environment variables from .env.example in the Render dashboard
 # (Environment tab) or via a synced env group. Never commit real secrets.
 
 services:
   # ── Job 1: Morning meeting report + interview sync ──────────────────────────
-  # Runs at 11:30 Armenia (07:30 UTC). If the recording isn't ready yet the
-  # script retries every 30 min until 13:30 Armenia automatically.
+  # Starts at 11:00 Armenia (07:00 UTC). The script checks every 30 min, 4
+  # times total (11:00 / 11:30 / 12:00 / 12:30). Sends the report as soon as
+  # meetings appear. Sends "no calls" notice only on the 4th check (12:30) if
+  # still nothing.
   - type: cron
     name: ob-meeting-daily-report
     runtime: python
-    schedule: "30 7 * * 1-5"
+    schedule: "0 7 * * 1-5"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python scripts/run_daily.py"
     envVars:
@@ -60,15 +63,16 @@ services:
       - key: INTERVIEW_TELEGRAM_ENABLED
         value: "false"
 
-  # ── Job 2: Afternoon retry — catches calls that finish after 13:30 Armenia ──
-  # Runs at 16:00 Armenia (12:00 UTC). Skips if a report was already delivered.
-  # All pipeline steps are idempotent, so running again on the same day is safe.
+  # ── Job 2: Afternoon safety net — catches calls that finish after 12:30 Armenia ──
+  # Runs at 16:00 Armenia (12:00 UTC) as a single final check. Sends report if
+  # meetings appeared after the morning window. Sends "no calls" notice if
+  # morning notice was not yet sent. Skips silently if already delivered.
   - type: cron
     name: ob-meeting-afternoon-retry
     runtime: python
     schedule: "0 12 * * 1-5"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python scripts/run_daily_meeting_report.py"
+    startCommand: "python scripts/run_daily_meeting_report.py --final-check"
     envVars:
       - key: SUPABASE_URL
         sync: false
