@@ -1048,61 +1048,120 @@ def test_telegram_markdown_fallback_to_plain():
     assert "parse_mode" not in session.calls[1]
 
 
-def test_deliver_today_missing_report_notifies():
+def test_deliver_today_intermediate_check_notifies():
+    """Checks 1–3 send 'Запись не найден… будем проверять' and stay retryable."""
     config = _config()
     repo = _repo()
     session = FakeTelegramSession()
     telegram = TelegramClient(config, session=session)
-    result = deliver_today(config, date_str="2026-03-26", repo=repo, telegram=telegram)
-    assert result["status"] == "report_not_found"
+
+    result = deliver_today(
+        config, date_str="2026-03-26", check_num=1, repo=repo, telegram=telegram
+    )
+    assert result["status"] == "no_report_waiting"   # retryable — loop continues
     assert len(session.calls) == 1
     text = session.calls[0]["text"]
     assert MISSING_REPORT_MESSAGE in text
-    # A short prompt nudges them to check whether the recording was uploaded.
     assert MISSING_REPORT_PROMPT in text
-    # Lilit and Emiliya are @-tagged so they're alerted on a no-report day.
     assert MISSING_REPORT_MENTIONS in text
     assert "@saakyans_21" in text and "@emilyaavanesyan" in text
-    # Sent as plain text so the "_" in the username isn't parsed as Markdown.
+    # Plain text so the "_" in usernames isn't parsed as Markdown italic.
     assert session.calls[0].get("parse_mode") is None
 
 
-def test_deliver_missing_report_notice_sent_once_per_day():
-    """Re-runs the same day must NOT spam the chat with repeat notices."""
+def test_deliver_today_final_check_sends_no_calls_notice():
+    """Final check (check 4 / afternoon cron) sends '📭 Сегодня звонков не было.'"""
     config = _config()
     repo = _repo()
     session = FakeTelegramSession()
     telegram = TelegramClient(config, session=session)
 
-    first = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    result = deliver_today(
+        config, date_str="2026-03-26", final_check=True, repo=repo, telegram=telegram
+    )
+    assert result["status"] == "report_not_found"    # terminal — loop stops
+    assert len(session.calls) == 1
+    text = session.calls[0]["text"]
+    from meeting_pipeline.deliver import NO_CALLS_MESSAGE
+    assert NO_CALLS_MESSAGE in text
+    assert MISSING_REPORT_PROMPT not in text          # no "will keep checking"
+    assert session.calls[0].get("parse_mode") is None
+
+
+def test_deliver_intermediate_check_idempotent():
+    """Same check_num on the same day sends the notice only once."""
+    config = _config()
+    repo = _repo()
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+
+    first = deliver_today(
+        config, date_str="2026-06-12", check_num=2, repo=repo, telegram=telegram
+    )
+    assert first["status"] == "no_report_waiting"
+    assert len(session.calls) == 1
+
+    # Same check fires again (e.g. Render re-runs): nothing sent.
+    second = deliver_today(
+        config, date_str="2026-06-12", check_num=2, repo=repo, telegram=telegram
+    )
+    assert second["status"] == "no_report_waiting"
+    assert len(session.calls) == 1   # no duplicate
+
+    # Different check number gets its own send.
+    third = deliver_today(
+        config, date_str="2026-06-12", check_num=3, repo=repo, telegram=telegram
+    )
+    assert third["status"] == "no_report_waiting"
+    assert len(session.calls) == 2   # check 3 goes out
+
+
+def test_deliver_final_notice_sent_once_per_day():
+    """Final 'no calls' notice is sent at most once per day."""
+    config = _config()
+    repo = _repo()
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+
+    first = deliver_today(
+        config, date_str="2026-06-12", final_check=True, repo=repo, telegram=telegram
+    )
     assert first["status"] == "report_not_found"
     assert len(session.calls) == 1
 
-    # Cron fires again (e.g. every 15 minutes): nothing is sent again.
-    second = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    # Afternoon cron fires: notice already sent — skip.
+    second = deliver_today(
+        config, date_str="2026-06-12", final_check=True, repo=repo, telegram=telegram
+    )
     assert second["status"] == "notice_already_sent"
     assert len(session.calls) == 1
 
-    # A new day gets its own notice.
-    third = deliver_today(config, date_str="2026-06-13", repo=repo, telegram=telegram)
+    # New day gets its own notice.
+    third = deliver_today(
+        config, date_str="2026-06-13", final_check=True, repo=repo, telegram=telegram
+    )
     assert third["status"] == "report_not_found"
     assert len(session.calls) == 2
 
 
 def test_deliver_missing_report_notice_retried_after_failed_send():
-    """A failed Telegram send releases the daily slot so the next run retries."""
+    """A failed Telegram send releases the slot so the next run can retry."""
     config = _config()
     config.telegram_max_retries = 1
     repo = _repo()
 
     broken = FlakyTelegramSession(fail_times=99, mode="raise")
     telegram = TelegramClient(config, session=broken, sleep=lambda s: None)
-    first = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    first = deliver_today(
+        config, date_str="2026-06-12", final_check=True, repo=repo, telegram=telegram
+    )
     assert first["delivered"] is False
 
     session = FakeTelegramSession()
     telegram = TelegramClient(config, session=session)
-    second = deliver_today(config, date_str="2026-06-12", repo=repo, telegram=telegram)
+    second = deliver_today(
+        config, date_str="2026-06-12", final_check=True, repo=repo, telegram=telegram
+    )
     assert second["status"] == "report_not_found"
     assert second["delivered"] is True
     assert len(session.calls) == 1
@@ -1750,7 +1809,7 @@ def test_armsoft_block_shows_invoice_and_tax_doc_counts():
     text = "\n".join(block)
     assert "накл." in text           # invoice count shown
     assert "нал. докум." in text     # tax doc count shown
-    assert "⚠️ нет активности" in text  # Оля had no activity
+    assert "⚠️" in text and "нет активности" in text  # Оля had no activity
 
 
 def test_analyze_meeting_fetches_armsoft_for_ai_verification():

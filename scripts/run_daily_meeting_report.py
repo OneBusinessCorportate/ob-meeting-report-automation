@@ -44,7 +44,7 @@ _MAX_RETRIES = 3             # 3 retries → 4 total checks (e.g. 10:00/10:30/11
 _RETRY_STATUSES = {"no_report_waiting", "delivery_failed"}
 
 
-def _run_pipeline(config, args: argparse.Namespace, summary: dict, *, final_check: bool = False) -> None:
+def _run_pipeline(config, args: argparse.Namespace, summary: dict, *, check_num: int = 1, final_check: bool = False) -> None:
     """Run one ingest→analyze→deliver pass, updating *summary* in-place."""
     if not args.skip_ingest:
         log.info("=== STEP 1: INGEST ===")
@@ -99,7 +99,7 @@ def _run_pipeline(config, args: argparse.Namespace, summary: dict, *, final_chec
     if not args.skip_deliver:
         log.info("=== STEP 3: DELIVER ===")
         try:
-            deliver_result = deliver_today(config, date_str=args.date, final_check=final_check)
+            deliver_result = deliver_today(config, date_str=args.date, check_num=check_num, final_check=final_check)
             summary["deliver"] = {
                 "status": deliver_result.get("status"),
                 "delivered": deliver_result.get("delivered"),
@@ -142,26 +142,27 @@ def main() -> int:
     config = load_config()
     summary: dict = {}
 
-    # First attempt. When --final-check is passed (afternoon cron) this is the
-    # only attempt and sends the notice immediately if no report exists.
-    _run_pipeline(config, args, summary, final_check=args.final_check)
+    # First attempt (check 1). When --final-check is passed (afternoon cron)
+    # this is the only attempt and sends the "no calls" notice immediately.
+    _run_pipeline(config, args, summary, check_num=1, final_check=args.final_check)
 
     # Retry loop (only when NOT in --final-check mode).
-    # Checks 1–3 return "no_report_waiting" → sleep and retry.
-    # Check 4 (retry_num == _MAX_RETRIES) passes final_check=True → sends notice.
+    # Checks 1–3 send "Запись не найден…" and return "no_report_waiting" → retry.
+    # Check 4 (retry_num == _MAX_RETRIES) sends "📭 Сегодня звонков не было."
     # All pipeline steps are idempotent so re-running on the same day is safe.
     for retry_num in range(1, _MAX_RETRIES + 1):
         deliver_status = summary.get("deliver", {}).get("status")
         if deliver_status not in _RETRY_STATUSES:
             break
+        check_num = retry_num + 1          # checks 2, 3, 4
         is_final = not args.final_check and (retry_num == _MAX_RETRIES)
         log.info(
-            "Delivery pending (%s) — retry %d/%d in %d min%s (sleeping).",
-            deliver_status, retry_num, _MAX_RETRIES, _RETRY_INTERVAL // 60,
+            "Delivery pending (%s) — check %d/%d in %d min%s (sleeping).",
+            deliver_status, check_num, _MAX_RETRIES + 1, _RETRY_INTERVAL // 60,
             " [final]" if is_final else "",
         )
         time.sleep(_RETRY_INTERVAL)
-        _run_pipeline(config, args, summary, final_check=is_final)
+        _run_pipeline(config, args, summary, check_num=check_num, final_check=is_final)
 
     log.info("=== DAILY RUN SUMMARY ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))

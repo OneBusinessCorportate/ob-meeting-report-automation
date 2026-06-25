@@ -27,11 +27,17 @@ from .utils import get_logger, parse_date
 
 log = get_logger("meeting_pipeline.deliver")
 
-MISSING_REPORT_MESSAGE = "📭 Сегодня звонков не было."
+# Sent on each intermediate check (checks 1–3) when no report is found yet.
+MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не найден."
+MISSING_REPORT_PROMPT = "Бот будет проверять наличие отчёта каждые 30 минут и отправит сообщение, как только найдёт его."
+MISSING_REPORT_MENTIONS = "@saakyans_21 @emilyaavanesyan"
 
-# mtg_delivery_log kinds: one (date, kind) row per Telegram send. The cron may
-# fire many times a day (manual re-runs, a mis-set schedule on Render), but
-# each message must reach the chat at most once per day.
+# Sent once on the final check (check 4 / --final-check) when all attempts failed.
+NO_CALLS_MESSAGE = "📭 Сегодня звонков не было."
+
+# mtg_delivery_log kinds:
+# - "no_report_check:{n}" — idempotency key for the n-th intermediate notice.
+# - NOTICE_SEND_KIND     — idempotency key for the final "no calls" notice.
 NOTICE_SEND_KIND = "missing_report_notice"
 
 # Analysis-row columns that feed the template alongside ai_metadata.report_extras.
@@ -109,6 +115,7 @@ def deliver_today(
     force: bool = False,
     force_notice: bool = False,
     final_check: bool = False,
+    check_num: int = 1,
     repo: Optional[SupabaseRepo] = None,
     telegram: Optional[TelegramClient] = None,
 ) -> Dict[str, Any]:
@@ -116,11 +123,21 @@ def deliver_today(
 
     Automatic runs (the cron) send each report at most once; ``force=True``
     (CLI: ``--force``) re-sends deliberately from a manual trigger.
-    ``force_notice=True`` (CLI: ``--force-notice``) re-sends the "not found"
-    notice even if one was already sent today — useful for testing.
-    ``final_check=True`` means this is the last scheduled attempt for the day:
-    if still no report, send the "no calls" notice. Earlier checks return
-    ``status="no_report_waiting"`` so the caller retries silently.
+
+    When no report exists the behaviour depends on which check this is:
+
+    * Checks 1–3 (``final_check=False``): send "Запись/отчёт за сегодня не
+      найден… будем проверять каждые 30 минут" and return
+      ``status="no_report_waiting"`` so the caller sleeps and retries.
+      Each check has its own idempotency key so the same message is not
+      sent twice within a single check window.
+
+    * Check 4 / afternoon cron (``final_check=True``): send the definitive
+      "📭 Сегодня звонков не было." notice (once per day) and return
+      ``status="report_not_found"``.
+
+    ``force_notice=True`` (CLI: ``--force-notice``) re-sends the final
+    "no calls" notice even if it was already sent today — useful for testing.
     """
     repo = repo or SupabaseRepo(config)
     telegram = telegram or TelegramClient(config)
@@ -129,37 +146,65 @@ def deliver_today(
     report = repo.get_today_current_report(on_date)
 
     if not report or not (report.get("telegram_report_md") or "").strip():
-        if not (final_check or force_notice):
-            log.info("No L2 report for %s yet — will retry.", on_date)
+        if final_check or force_notice:
+            # ── Final check: send "📭 Сегодня звонков не было." ──────────────
+            if force_notice:
+                repo.release_daily_send(on_date, NOTICE_SEND_KIND)
+            if not repo.claim_daily_send(on_date, NOTICE_SEND_KIND):
+                log.info(
+                    "'No calls' notice for %s already sent — skipping.", on_date
+                )
+                return {
+                    "ok": False,
+                    "delivered": False,
+                    "status": "notice_already_sent",
+                    "telegram": None,
+                }
+            log.warning(
+                "No report after all checks for %s — sending 'no calls' notice.",
+                on_date,
+            )
+            notice = f"{NO_CALLS_MESSAGE}\n\nДата: {on_date.isoformat()}"
+            result = telegram.send_message(notice, parse_mode=None)
+            if not result.ok:
+                repo.release_daily_send(on_date, NOTICE_SEND_KIND)
+            return {
+                "ok": False,
+                "delivered": result.ok,
+                "status": "report_not_found",
+                "telegram": result,
+            }
+
+        # ── Intermediate check: "Запись не найден, будем проверять…" ─────────
+        check_kind = f"no_report_check:{check_num}"
+        if not repo.claim_daily_send(on_date, check_kind):
+            log.info(
+                "Check %d notice for %s already sent — skipping.", check_num, on_date
+            )
             return {
                 "ok": False,
                 "delivered": False,
                 "status": "no_report_waiting",
                 "telegram": None,
             }
-        if force_notice:
-            repo.release_daily_send(on_date, NOTICE_SEND_KIND)
-        if not repo.claim_daily_send(on_date, NOTICE_SEND_KIND):
-            log.info(
-                "Missing-report notice for %s was already sent today — "
-                "not sending again.",
-                on_date,
-            )
-            return {
-                "ok": False,
-                "delivered": False,
-                "status": "notice_already_sent",
-                "telegram": None,
-            }
-        log.warning("No current L2 report for %s — sending notification.", on_date)
-        notice = f"{MISSING_REPORT_MESSAGE}\n\nДата: {on_date.isoformat()}"
+        log.warning(
+            "No report for %s (check %d) — sending interim notification.",
+            on_date, check_num,
+        )
+        # Plain text so the "_" in usernames isn't parsed as Markdown italic.
+        notice = (
+            f"{MISSING_REPORT_MESSAGE}\n\n"
+            f"Дата: {on_date.isoformat()}\n\n"
+            f"{MISSING_REPORT_PROMPT}\n\n"
+            f"{MISSING_REPORT_MENTIONS}"
+        )
         result = telegram.send_message(notice, parse_mode=None)
         if not result.ok:
-            repo.release_daily_send(on_date, NOTICE_SEND_KIND)
+            repo.release_daily_send(on_date, check_kind)
         return {
             "ok": False,
             "delivered": result.ok,
-            "status": "report_not_found",
+            "status": "no_report_waiting",
             "telegram": result,
         }
 
