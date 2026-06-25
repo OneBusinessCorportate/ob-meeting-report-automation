@@ -27,16 +27,7 @@ from .utils import get_logger, parse_date
 
 log = get_logger("meeting_pipeline.deliver")
 
-MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не найден."
-
-# Follow-up line: the bot actively retries every 30 min (up to 4 times).
-MISSING_REPORT_PROMPT = "Бот будет проверять наличие отчёта каждые 30 минут и отправит сообщение, как только найдёт его."
-
-# People to @-tag when no recording/report is found, so they notice and can act
-# (Lilit and Emiliya). Telegram detects @mentions in plain text regardless of
-# parse mode, so the notice is sent as plain text to avoid the "_" in a username
-# being mis-parsed as Markdown.
-MISSING_REPORT_MENTIONS = "@saakyans_21 @emilyaavanesyan"
+MISSING_REPORT_MESSAGE = "📭 Сегодня звонков не было."
 
 # mtg_delivery_log kinds: one (date, kind) row per Telegram send. The cron may
 # fire many times a day (manual re-runs, a mis-set schedule on Render), but
@@ -149,14 +140,7 @@ def deliver_today(
                 "telegram": None,
             }
         log.warning("No current L2 report for %s — sending notification.", on_date)
-        notice = (
-            f"{MISSING_REPORT_MESSAGE}\n\n"
-            f"Дата: {on_date.isoformat()}\n\n"
-            f"{MISSING_REPORT_PROMPT}\n\n"
-            f"{MISSING_REPORT_MENTIONS}"
-        )
-        # Plain text (no Markdown) so the "_" in @saakyans_21 isn't treated as
-        # italic markup; @mentions still notify the users.
+        notice = f"{MISSING_REPORT_MESSAGE}\n\nДата: {on_date.isoformat()}"
         result = telegram.send_message(notice, parse_mode=None)
         if not result.ok:
             # Free the slot so the next run can retry the notice.
