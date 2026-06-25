@@ -11,13 +11,14 @@ extras fall back to their stored ``telegram_report_md``.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, Optional
 
 from .config import Config
 from .report_render import (
     meeting_time_range,
     render_analytics_message,
+    render_armsoft_message,
     render_telegram_report,
 )
 from .supabase_repo import SupabaseRepo
@@ -90,32 +91,12 @@ def _render_with_current_template(
         except Exception as exc:  # prior stats are best-effort
             log.warning("Could not load prior meeting stats for rendering: %s", exc)
             prior_stats = []
-        try:
-            armsoft_activity = (
-                repo.get_armsoft_portfolio_activity(meeting_date)
-                if meeting_date
-                else []
-            )
-        except Exception as exc:  # cross-check is best-effort
-            log.warning("Could not load Armsoft portfolio activity: %s", exc)
-            armsoft_activity = []
-        try:
-            taxservice_activity = (
-                repo.get_taxservice_activity(meeting_date)
-                if meeting_date
-                else []
-            )
-        except Exception as exc:  # cross-check is best-effort
-            log.warning("Could not load taxservice activity: %s", exc)
-            taxservice_activity = []
         report_md = render_telegram_report(
             data,
             meeting_date=meeting_date,
             time_range=meeting_time_range(meeting, config.timezone_offset_hours),
             team_roster=team_roster,
             prior_stats=prior_stats,
-            armsoft_activity=armsoft_activity,
-            taxservice_activity=taxservice_activity,
             include_analytics=False,
         )
         analytics_md = render_analytics_message(
@@ -259,5 +240,77 @@ def deliver_today(
         "status": "delivered" if result.ok else "delivery_failed",
         "analysis_id": report["id"],
         "analytics_sent": bool(analytics_result and analytics_result.ok),
+        "telegram": result,
+    }
+
+
+ARMSOFT_SEND_KIND_PREFIX = "armsoft"
+
+
+def deliver_armsoft_today(
+    config: Config,
+    *,
+    date_str: Optional[str] = None,
+    force: bool = False,
+    repo: Optional[SupabaseRepo] = None,
+    telegram: Optional[TelegramClient] = None,
+) -> Dict[str, Any]:
+    """Deliver the evening ArmSoft/TaxService cross-check message.
+
+    Runs at 18:00 Armenia (14:00 UTC) so bookkeepers can review before the
+    next morning's planning meeting. Idempotent: sends at most once per day.
+    """
+    repo = repo or SupabaseRepo(config)
+    telegram = telegram or TelegramClient(config)
+    on_date: date = parse_date(date_str, config.timezone_offset_hours)
+
+    send_kind = f"{ARMSOFT_SEND_KIND_PREFIX}:{on_date.isoformat()}"
+    if not force and not repo.claim_daily_send(on_date, send_kind):
+        log.info("ArmSoft report for %s already sent today.", on_date)
+        return {"ok": True, "delivered": True, "status": "already_delivered", "telegram": None}
+
+    # Fetch today's activity: get_armsoft_portfolio_activity(before_date) returns
+    # data for the day BEFORE before_date, so we pass tomorrow to get today's data.
+    activity_date = on_date.isoformat()
+    before_date = (on_date + timedelta(days=1)).isoformat()
+    try:
+        armsoft_activity = repo.get_armsoft_portfolio_activity(before_date)
+    except Exception as exc:
+        log.warning("Could not load Armsoft activity: %s", exc)
+        armsoft_activity = []
+    try:
+        taxservice_activity = repo.get_taxservice_activity(before_date)
+    except Exception as exc:
+        log.warning("Could not load TaxService activity: %s", exc)
+        taxservice_activity = []
+
+    if not armsoft_activity and not taxservice_activity:
+        log.info("No ArmSoft/TaxService data for %s — skipping evening message.", on_date)
+        repo.release_daily_send(on_date, send_kind)
+        return {"ok": True, "delivered": False, "status": "no_data", "telegram": None}
+
+    md = render_armsoft_message(
+        meeting_date=activity_date,
+        armsoft_activity=armsoft_activity,
+        taxservice_activity=taxservice_activity,
+    )
+    if not md.strip():
+        log.info("ArmSoft message rendered empty for %s — skipping.", on_date)
+        repo.release_daily_send(on_date, send_kind)
+        return {"ok": True, "delivered": False, "status": "no_data", "telegram": None}
+
+    result = telegram.send_message(md, parse_mode="Markdown")
+    if not result.ok:
+        repo.release_daily_send(on_date, send_kind)
+
+    if result.ok:
+        log.info("Delivered ArmSoft evening report for %s.", on_date)
+    else:
+        log.error("ArmSoft delivery failed for %s: %s", on_date, result.error)
+
+    return {
+        "ok": result.ok,
+        "delivered": result.ok,
+        "status": "delivered" if result.ok else "delivery_failed",
         "telegram": result,
     }

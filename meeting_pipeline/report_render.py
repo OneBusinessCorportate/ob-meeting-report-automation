@@ -189,6 +189,50 @@ def _armsoft_block(activity: List[Dict[str, Any]]) -> List[str]:
     return lines
 
 
+def _taxservice_block(activity: List[Dict[str, Any]]) -> List[str]:
+    if not activity:
+        return []
+    date_label = _dd_mm(activity[0].get("date", ""))
+    lines: List[str] = [f"\U0001f3db НАЛОГОВАЯ СЛУЖБА ({date_label})", ""]
+    for entry in activity:
+        name = entry.get("name") or "?"
+        assigned = entry.get("assigned", 0)
+        active = entry.get("active", 0)
+        invoices = entry.get("invoices", 0)
+        if assigned == 0:
+            lines.append(f"  – {name}: нет назначенных клиентов")
+        elif active == 0:
+            lines.append(f"  – {name} — {assigned} кл. | нет активности")
+        else:
+            lines.append(f"  ✅ {name} — {invoices} счёт-фактур, {active}/{assigned} компаний")
+    lines.append("")
+    return lines
+
+
+def render_armsoft_message(
+    *,
+    meeting_date: Optional[str] = None,
+    armsoft_activity: Optional[List[Dict[str, Any]]] = None,
+    taxservice_activity: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Standalone evening message with ArmSoft + TaxService cross-check data.
+
+    Sent separately from the morning report (at 18:00 Armenia) so bookkeepers
+    can review and comment before the next day's planning meeting.
+    """
+    if not armsoft_activity and not taxservice_activity:
+        return ""
+    title = "\U0001f4ca ДАННЫЕ ПО БАЗАМ"
+    if meeting_date:
+        title += f" · {_dd_mm(meeting_date)}"
+    lines: List[str] = [title, ""]
+    if armsoft_activity:
+        lines += _armsoft_block(armsoft_activity)
+    if taxservice_activity:
+        lines += _taxservice_block(taxservice_activity)
+    return _finalize(lines)
+
+
 def _verifications_compact_block(data: Dict[str, Any]) -> List[str]:
     verifications = [
         v for v in data.get("db_verifications") or []
@@ -276,33 +320,27 @@ def _person_attention(name_canonical: str, data: Dict[str, Any]) -> List[str]:
 
 
 def _general_attention_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
-    """Risks NOT assigned to any specific roster person (shown once at the bottom)."""
+    """All risks/situations — every entry shown, owner displayed inline."""
     severity_rank = {"high": 0, "medium": 1, "low": 2}
-    risks = [
-        r for r in data.get("problems_risks") or []
-        if _clean(r.get("text")) and
-        _canonical_first(_clean(r.get("owner", ""))) not in roster_firsts
-    ]
+    risks = [r for r in data.get("problems_risks") or [] if _clean(r.get("text"))]
     if not risks:
         return []
     risks.sort(key=lambda r: severity_rank.get(_clean(r.get("severity")).lower(), 1))
-    out = ["⚠️ ОБРАТИТЬ ВНИМАНИЕ", ""]
+    out = ["⚠️ СИТУАЦИИ И РИСКИ", ""]
     for i, risk in enumerate(risks, start=1):
         severity = _clean(risk.get("severity")).lower()
         icon = _SEVERITY_ICONS.get(severity, "\U0001f7e1")
-        out.append(f"  {icon} {i}. {_clean(risk.get('text'))}")
+        owner = _clean(risk.get("owner"))
+        owner_part = f" ({owner})" if owner and owner.lower() not in _MISSING_WORDS else ""
+        out.append(f"  {icon} {i}. {_clean(risk.get('text'))}{owner_part}")
         out.append(f"  Решение: {_value_or_cross(risk.get('decision'))}")
         out.append("")
     return out
 
 
 def _general_tasks_block(data: Dict[str, Any], roster_firsts: set) -> List[str]:
-    """Tasks NOT assigned to any specific roster person (shown once at the bottom)."""
-    items = [
-        t for t in data.get("action_items") or []
-        if _clean(t.get("text")) and
-        _canonical_first(_clean(t.get("assignee", ""))) not in roster_firsts
-    ]
+    """All action items — every task shown, grouped by assignee."""
+    items = [t for t in data.get("action_items") or [] if _clean(t.get("text"))]
     if not items:
         return []
     grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -342,8 +380,8 @@ def render_telegram_report(
     time_range: Optional[str] = None,
     team_roster: Optional[List[Dict[str, Any]]] = None,
     prior_stats: Optional[List[Dict[str, Any]]] = None,
-    armsoft_activity: Optional[List[Dict[str, Any]]] = None,
-    taxservice_activity: Optional[List[Dict[str, Any]]] = None,
+    armsoft_activity: Optional[List[Dict[str, Any]]] = None,  # unused here; see render_armsoft_message()
+    taxservice_activity: Optional[List[Dict[str, Any]]] = None,  # unused here; see render_armsoft_message()
     include_analytics: bool = True,
 ) -> str:
     manager = _find_manager(team_roster)
@@ -355,24 +393,9 @@ def render_telegram_report(
         lines.append(meeting_date)
     lines.append("")
 
-    armsoft_lookup: Dict[str, Any] = {
-        _canonical_first(e.get("name", "")): e
-        for e in (armsoft_activity or [])
-        if _canonical_first(e.get("name", ""))
-    }
-    taxservice_lookup: Dict[str, Any] = {
-        _canonical_first(e.get("name", "")): e
-        for e in (taxservice_activity or [])
-        if _canonical_first(e.get("name", ""))
-    }
-
     lines += _score_block(data)
     lines += _attendance_block(data)
-    lines += _accountant_blocks(
-        data, team_roster, manager,
-        armsoft_lookup or None,
-        taxservice_lookup or None,
-    )
+    lines += _accountant_blocks(data, team_roster, manager)
     lines += _manager_block(data, manager, roster_firsts)
     lines += _general_attention_block(data, roster_firsts)
     lines += _critical_errors_block(data)
@@ -493,8 +516,6 @@ def _accountant_blocks(
     data: Dict[str, Any],
     team_roster: Optional[List[Dict[str, Any]]],
     manager: str,
-    armsoft_lookup: Optional[Dict[str, Any]] = None,
-    taxservice_lookup: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     roster_firsts = _roster_firsts(team_roster)
     entries = [
@@ -545,12 +566,6 @@ def _accountant_blocks(
         out += ["  " + l for l in _optional_field_lines("Помощь", entry.get("needs_help"))]
         out += ["  " + l for l in _optional_field_lines("Вопрос", entry.get("question_to_manager"))]
         out += ["  " + l for l in _optional_field_lines("Не выполнено", entry.get("task_not_done_reason"))]
-        if armsoft_lookup:
-            out += ["  " + l for l in _armsoft_line(_canonical_first(entry.get("name")), armsoft_lookup)]
-        if taxservice_lookup:
-            out += ["  " + l for l in _taxservice_line(_canonical_first(entry.get("name")), taxservice_lookup)]
-        out += ["  " + l for l in _person_tasks(_canonical_first(entry.get("name")), data, roster_firsts)]
-        out += ["  " + l for l in _person_attention(_canonical_first(entry.get("name")), data)]
         out.append("")
     if out and out[-1] != "":
         out.append("")

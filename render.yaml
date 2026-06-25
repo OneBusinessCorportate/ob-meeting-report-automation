@@ -71,6 +71,25 @@ services:
       - key: INTERVIEW_TELEGRAM_ENABLED
         value: "false"
 
+  # Evening ArmSoft / TaxService cross-check (18:00 Armenia = 14:00 UTC).
+  # Sent separately from the morning report so bookkeepers can see today's
+  # actual database activity and comment before the next day's planning meeting.
+  - type: cron
+    name: ob-armsoft-evening-report
+    runtime: python
+    schedule: "0 14 * * 1-5"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python scripts/deliver_armsoft.py"
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_MANAGEMENT_CHAT_ID
+        sync: false
+
 # --- Alternative: three separate cron jobs (uncomment to use instead) --------
 #   - type: cron
 #     name: ob-meeting-ingest
