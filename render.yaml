@@ -27,14 +27,11 @@ services:
       - key: TIMELESS_API_BASE_URL
         value: https://api.timeless.day/v1
       - key: AI_PROVIDER
-        value: anthropic
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      # Only needed when AI_PROVIDER=gemini:
+        value: gemini
       - key: GEMINI_API_KEY
         sync: false
       - key: AI_MODEL_ID
-        value: claude-sonnet-4-20250514
+        value: gemini-2.5-flash
       - key: AI_PROMPT_VERSION
         value: full_transcript_prompt_v1
       - key: TELEGRAM_BOT_TOKEN
@@ -82,13 +79,11 @@ services:
       - key: TIMELESS_API_BASE_URL
         value: https://api.timeless.day/v1
       - key: AI_PROVIDER
-        value: anthropic
-      - key: ANTHROPIC_API_KEY
-        sync: false
+        value: gemini
       - key: GEMINI_API_KEY
         sync: false
       - key: AI_MODEL_ID
-        value: claude-sonnet-4-20250514
+        value: gemini-2.5-flash
       - key: AI_PROMPT_VERSION
         value: full_transcript_prompt_v1
       - key: TELEGRAM_BOT_TOKEN
