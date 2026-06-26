@@ -29,7 +29,7 @@ log = get_logger("meeting_pipeline.deliver")
 
 # Sent on each intermediate check (checks 1–3) when no report is found yet.
 MISSING_REPORT_MESSAGE = "Запись/отчёт за сегодня не найден."
-MISSING_REPORT_PROMPT = "Бот будет проверять наличие отчёта каждые 30 минут и отправит сообщение, как только найдёт его."
+MISSING_REPORT_PROMPT = "Проверю снова через 30 минут и пришлю отчёт, как только он появится."
 MISSING_REPORT_MENTIONS = "@saakyans_21 @emilyaavanesyan"
 
 # Sent once on the final check (check 4 / --final-check) when all attempts failed.
