@@ -50,6 +50,49 @@ _RENDER_COLUMNS = (
 )
 
 
+def _missing_report_notice(on_date: date) -> str:
+    """Build the intermediate "not found, re-checking in 30 min" notice text.
+
+    Single source of truth so ``deliver_today`` and the manual-trigger
+    ``send_missing_report_notice`` always send the exact same message.
+    """
+    return (
+        f"{MISSING_REPORT_MESSAGE}\n\n"
+        f"Дата: {on_date.isoformat()}\n\n"
+        f"{MISSING_REPORT_PROMPT}\n\n"
+        f"{MISSING_REPORT_MENTIONS}"
+    )
+
+
+def send_missing_report_notice(
+    config: Config,
+    *,
+    date_str: Optional[str] = None,
+    telegram: Optional[TelegramClient] = None,
+) -> Dict[str, Any]:
+    """Send the intermediate "not found / will re-check in 30 min" notice once.
+
+    Unconditional and idempotency-free: used by the manual-trigger Render job
+    (``ob-meeting-missing-notice``) so the team can preview / re-send this exact
+    message on demand from the Render dashboard without a shell. It does not
+    touch Supabase — only Telegram credentials are required.
+    """
+    telegram = telegram or TelegramClient(config)
+    on_date: date = parse_date(date_str, config.timezone_offset_hours)
+    # Plain text so the "_" in usernames isn't parsed as Markdown italic.
+    result = telegram.send_message(_missing_report_notice(on_date), parse_mode=None)
+    if result.ok:
+        log.info("Sent on-demand missing-report notice for %s.", on_date)
+    else:
+        log.error("On-demand missing-report notice failed: %s", result.error)
+    return {
+        "ok": result.ok,
+        "delivered": result.ok,
+        "status": "notice_sent" if result.ok else "delivery_failed",
+        "telegram": result,
+    }
+
+
 def _render_with_current_template(
     config: Config, repo: SupabaseRepo, report: Dict[str, Any]
 ) -> tuple[Optional[str], Optional[str]]:
@@ -192,13 +235,9 @@ def deliver_today(
             on_date, check_num,
         )
         # Plain text so the "_" in usernames isn't parsed as Markdown italic.
-        notice = (
-            f"{MISSING_REPORT_MESSAGE}\n\n"
-            f"Дата: {on_date.isoformat()}\n\n"
-            f"{MISSING_REPORT_PROMPT}\n\n"
-            f"{MISSING_REPORT_MENTIONS}"
+        result = telegram.send_message(
+            _missing_report_notice(on_date), parse_mode=None
         )
-        result = telegram.send_message(notice, parse_mode=None)
         if not result.ok:
             repo.release_daily_send(on_date, check_kind)
         return {

@@ -116,6 +116,24 @@ services:
       - key: TELEGRAM_MANAGEMENT_CHAT_ID
         value: "-5035715113"
 
+  # ── Job 4: Manual-trigger "report not found" notice (on demand) ─────────────
+  # Sends ONLY the intermediate "Запись/отчёт не найден … проверю снова через
+  # 30 минут" message to the management chat. There is no automatic schedule:
+  # "0 0 31 2 *" is Feb 31, a date that never exists, so this job never fires on
+  # its own. Run it by pressing "Trigger run" in the Render dashboard — handy for
+  # previewing / re-sending the notice when you have no shell access.
+  - type: cron
+    name: ob-meeting-missing-notice
+    runtime: python
+    schedule: "0 0 31 2 *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python scripts/send_missing_notice.py"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_MANAGEMENT_CHAT_ID
+        value: "-5035715113"
+
 # --- Alternative: three separate cron jobs (uncomment to use instead) --------
 #   - type: cron
 #     name: ob-meeting-ingest

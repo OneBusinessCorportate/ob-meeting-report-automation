@@ -27,6 +27,7 @@ from meeting_pipeline.deliver import (
     MISSING_REPORT_MESSAGE,
     MISSING_REPORT_PROMPT,
     deliver_today,
+    send_missing_report_notice,
 )
 from meeting_pipeline.ingest import (
     build_raw_transcript,
@@ -1067,6 +1068,30 @@ def test_deliver_today_intermediate_check_notifies():
     assert "@saakyans_21" in text and "@emilyaavanesyan" in text
     # Plain text so the "_" in usernames isn't parsed as Markdown italic.
     assert session.calls[0].get("parse_mode") is None
+
+
+def test_send_missing_report_notice_sends_unconditionally():
+    """Manual-trigger notice sends the full message regardless of report state."""
+    config = _config()
+    session = FakeTelegramSession()
+    telegram = TelegramClient(config, session=session)
+
+    result = send_missing_report_notice(
+        config, date_str="2026-06-26", telegram=telegram
+    )
+    assert result["status"] == "notice_sent"
+    assert result["delivered"] is True
+    assert len(session.calls) == 1
+    text = session.calls[0]["text"]
+    assert MISSING_REPORT_MESSAGE in text
+    assert MISSING_REPORT_PROMPT in text
+    assert MISSING_REPORT_MENTIONS in text
+    assert "2026-06-26" in text
+    assert session.calls[0].get("parse_mode") is None
+
+    # No idempotency lock — a second call sends again.
+    send_missing_report_notice(config, date_str="2026-06-26", telegram=telegram)
+    assert len(session.calls) == 2
 
 
 def test_deliver_today_final_check_sends_no_calls_notice():
